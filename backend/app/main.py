@@ -637,12 +637,13 @@ def _record_chapter_revision(
     submission_status: str,
     scheduled_for: datetime | None,
 ) -> None:
+    scheduled_value = scheduled_for.isoformat() if isinstance(scheduled_for, datetime) else scheduled_for
     execute_write(
         """
         INSERT INTO chapter_revisions (chapter_id, title, content, notes, submission_status, scheduled_for)
         VALUES (%s, %s, %s, %s, %s, %s)
         """,
-        (chapter_id, title, content, notes, submission_status, scheduled_for),
+        (chapter_id, title, content, notes, submission_status, scheduled_value),
     )
 
 
@@ -1471,6 +1472,7 @@ def create_story_chapter(story_id: int, payload: ChapterCreateRequest):
 
     submission_status = (payload.submission_status or "draft").strip() or "draft"
     scheduled_for = _parse_optional_datetime(payload.scheduled_for)
+    scheduled_value = scheduled_for.isoformat() if isinstance(scheduled_for, datetime) else scheduled_for
     row_id, _ = execute_write(
         """
         INSERT INTO chapters (
@@ -1485,7 +1487,7 @@ def create_story_chapter(story_id: int, payload: ChapterCreateRequest):
             payload.content,
             payload.notes or "",
             submission_status,
-            scheduled_for,
+            scheduled_value,
             chapter_number,
         ),
     )
@@ -1517,7 +1519,12 @@ def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
         if payload.scheduled_for is not None
         else current.get("scheduled_for")
     )
-    _, affected = execute_write(
+    # Normalize scheduled_for for both SQLite (TEXT) and MySQL (DATETIME).
+    scheduled_value = next_scheduled_for
+    if isinstance(scheduled_value, datetime):
+        scheduled_value = scheduled_value.isoformat()
+
+    execute_write(
         """
         UPDATE chapters
         SET chapter_number=%s, title=%s, content=%s, notes=%s, submission_status=%s,
@@ -1532,22 +1539,23 @@ def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
             next_content,
             next_notes,
             next_status,
-            next_scheduled_for,
+            scheduled_value,
             payload.chapter_number
             if payload.chapter_number is not None
             else current["sort_order"],
             chapter_id,
         ),
     )
-    if affected == 0:
-        raise HTTPException(status_code=400, detail="Failed to update chapter")
+    # Do not treat SQLite rowcount==0 as failure: identical values still succeed.
     _record_chapter_revision(
         chapter_id,
         next_title,
         next_content,
         next_notes,
         next_status,
-        next_scheduled_for,
+        next_scheduled_for if isinstance(next_scheduled_for, datetime) else (
+            _parse_optional_datetime(str(next_scheduled_for)) if next_scheduled_for else None
+        ),
     )
     bump_content_version()
     return {"ok": True}

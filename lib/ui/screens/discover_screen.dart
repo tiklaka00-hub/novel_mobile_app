@@ -1268,20 +1268,25 @@ class StoryDetailScreen extends StatelessWidget {
   final ApiService apiService;
 
   Future<void> _saveToLibrary(BuildContext context) async {
-    await apiService.addLibraryEntry({
-      'book_id': book.id,
-      'reading_status': 'Reading',
-      'updated_text': book.statusText,
-      'chapters': 1,
-      'primary_genre': book.genre,
-      'secondary_genre': '',
-    });
-    if (!context.mounted) {
-      return;
+    try {
+      await apiService.addLibraryEntry({
+        'book_id': book.id,
+        'reading_status': 'Reading',
+        'updated_text': book.statusText.isNotEmpty ? book.statusText : 'Just added',
+        'chapters': 1,
+        'primary_genre': book.genre,
+        'secondary_genre': '',
+      });
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Saved to Current Reads')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save: $e')),
+      );
     }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Saved to your library')));
   }
 
   @override
@@ -1359,14 +1364,8 @@ class StoryDetailScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // Description
-                  Text(
-                    book.description,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      height: 1.6,
-                      color: const Color(0xFF555555),
-                    ),
-                  ),
+                  // Description with Read more / Show less
+                  _ExpandableDescription(text: book.description),
                   const SizedBox(height: 20),
 
                   // Genres
@@ -1421,6 +1420,61 @@ class StoryDetailScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+class _ExpandableDescription extends StatefulWidget {
+  const _ExpandableDescription({required this.text});
+
+  final String text;
+
+  @override
+  State<_ExpandableDescription> createState() => _ExpandableDescriptionState();
+}
+
+class _ExpandableDescriptionState extends State<_ExpandableDescription> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = widget.text.trim().isEmpty
+        ? 'No description available yet.'
+        : widget.text.trim();
+    final needsToggle = text.length > 180;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          text,
+          maxLines: _expanded || !needsToggle ? null : 4,
+          overflow: _expanded || !needsToggle
+              ? TextOverflow.visible
+              : TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                height: 1.6,
+                color: const Color(0xFF555555),
+              ),
+        ),
+        if (needsToggle)
+          TextButton(
+            onPressed: () => setState(() => _expanded = !_expanded),
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: const Size(0, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text(
+              _expanded ? 'Show less' : 'Read more',
+              style: const TextStyle(
+                color: AppTheme.brand,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

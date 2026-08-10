@@ -216,6 +216,17 @@ SEED_BOOKS = [
     ),
 ]
 
+SEED_NOTIFICATIONS = [
+    ("Story", "New chapter available", "A story you follow just published a new chapter. Open Discover to read it.", "Just now", 1),
+    ("Story", "Story recommendation", "Based on your library, try these trending stories this week.", "1h ago", 2),
+    ("Community", "Welcome to the community", "Follow authors and join discussions to see updates here.", "Today", 1),
+    ("Community", "Author reply", "An author replied to a comment on a story you liked.", "Yesterday", 2),
+    ("System", "Inkitt", "Earn some karma. Help this author today by reading their story!", "Tue Apr 19:11", 1),
+    ("System", "App update", "Content refreshed. Pull to refresh Discover for the latest stories.", "Now", 2),
+]
+
+
+
 def _to_db_query(query: str) -> str:
     return query.replace("%s", "?") if USE_SQLITE else query
 
@@ -704,6 +715,27 @@ def _run_startup_migrations_sqlite(connection) -> dict[str, int]:
             )
             result["books_added"] += 1
 
+    # Clear broken cover paths that point to missing files (e.g. story3.jpg)
+    cursor.execute(
+        """
+        UPDATE books SET cover_path = ''
+        WHERE cover_path LIKE 'story%.jpg'
+           OR cover_path LIKE '/uploads/story%.jpg'
+           OR cover_path LIKE 'uploads/story%.jpg'
+        """
+    )
+
+    for tab_name, title, message, created_at, sort_order in SEED_NOTIFICATIONS:
+        cursor.execute(
+            "SELECT id FROM notifications WHERE tab_name=? AND title=? LIMIT 1",
+            (tab_name, title),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO notifications (tab_name, title, message, created_at, sort_order) VALUES (?, ?, ?, ?, ?)",
+                (tab_name, title, message, created_at, sort_order),
+            )
+
     static_story_dir = Path(__file__).resolve().parents[2] / "story_card_images"
     if static_story_dir.exists():
         for image_path in sorted(static_story_dir.glob("*")):
@@ -1000,6 +1032,26 @@ def run_startup_migrations() -> dict[str, int]:
                 ),
             )
             result["books_added"] += 1
+
+    cursor.execute(
+        """
+        UPDATE books SET cover_path = ''
+        WHERE cover_path LIKE 'story%.jpg'
+           OR cover_path LIKE '/uploads/story%.jpg'
+           OR cover_path LIKE 'uploads/story%.jpg'
+        """
+    )
+
+    for tab_name, title, message, created_at, sort_order in SEED_NOTIFICATIONS:
+        cursor.execute(
+            "SELECT id FROM notifications WHERE tab_name=%s AND title=%s LIMIT 1",
+            (tab_name, title),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO notifications (tab_name, title, message, created_at, sort_order) VALUES (%s, %s, %s, %s, %s)",
+                (tab_name, title, message, created_at, sort_order),
+            )
 
     static_story_dir = Path(__file__).resolve().parents[2] / "story_card_images"
     if static_story_dir.exists():

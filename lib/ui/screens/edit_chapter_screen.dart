@@ -141,10 +141,10 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
           ),
         );
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save chapter')),
+          SnackBar(content: Text('Failed to save chapter: $e')),
         );
       }
     } finally {
