@@ -1,20 +1,43 @@
-# Free hosting (no credit card / no payment)
+# Free hosting (no credit card / no payment) — 2026
 
-## Recommended stack (matches this project)
+## Does this app use SQLite or MySQL?
 
-| Part | Free option | Notes |
-|------|-------------|--------|
-| Backend (FastAPI) | **Hugging Face Spaces** | You already use `lakmasachith-novel-app-backend.hf.space` |
-| Database | **SQLite** on the Space | Set `DB_TYPE=sqlite` — no external DB account |
-| Flutter app | Install APK / Play internal | App talks to HF URL in release builds |
+**Both.** The same code works with either:
 
-Other free options (no card usually required): **Render** free web service (spins down), **Koyeb**, **PythonAnywhere** (limited), **Oracle Cloud Always Free** (needs card for verify sometimes).
+| Mode | When | Config |
+|------|------|--------|
+| **SQLite** | Local + free cloud | `DB_TYPE=sqlite` |
+| **MySQL** | Local MySQL or paid cloud DB | `DB_TYPE=mysql` + MYSQL_* vars |
 
-**Avoid for zero-card:** Railway / some Fly.io trials that force a card.
+Startup creates tables, seeds stories, and runs migrations for both.
+You only change env vars — no code switch.
 
 ---
 
-## Local (SQLite)
+## Hugging Face Spaces (what changed)
+
+As of 2026, **creating Gradio/Docker Spaces needs a paid plan** (PRO ~$9/mo).
+Static Spaces stay free, but our FastAPI backend needs Docker → **not free anymore**.
+If you already have an old Space running, it may keep working until you rebuild.
+
+---
+
+## Best free stack for this project (no card)
+
+| Part | Free option | Notes |
+|------|-------------|--------|
+| Backend | **Render** free Web Service | No credit card. Sleeps after ~15 min idle; wakes in ~30–60s |
+| Database | **SQLite** on the same service | Set `DB_TYPE=sqlite` — no second account |
+| Optional DB | **Neon** free Postgres | Only if you later add Postgres; not required now |
+| Flutter | APK / debug with `API_BASE_URL` | Point at your Render URL |
+
+Other no-card options: **Koyeb** (limited free), **PythonAnywhere** (not ideal for FastAPI/ASGI).
+
+**Avoid if you refuse any card:** Railway / Fly.io (card or trial-only).
+
+---
+
+## Local (SQLite) — keep using this daily
 
 `backend/.env` or `.env.local`:
 
@@ -41,76 +64,98 @@ flutter run --dart-define=API_BASE_URL=http://192.168.x.x:8000
 
 ---
 
-## Live: Hugging Face Spaces (free)
+## Live free: Render + SQLite (recommended)
 
-1. Create a Space: https://huggingface.co/new-space  
-   - SDK: **Docker**  
-   - Hardware: CPU basic (free)  
-   - Visibility: public or private
+### 1. Create account
+https://render.com — sign up with GitHub. **No credit card** for free tier.
 
-2. Point the Space at this repo’s `backend/` folder (or push backend files into the Space repo).
+### 2. New Web Service
+- Connect repo: `tiklaka00-hub/novel_mobile_app`
+- Root directory: `backend`
+- Runtime: **Docker** (uses `backend/Dockerfile`)  
+  **or** Python: Build `pip install -r requirements.txt`  
+  Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
-3. Space **Secrets / Variables** (Settings → Variables and secrets):
+If using **Python** (not Docker), set start command:
+
+```
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+### 3. Environment variables (Render → Environment)
 
 ```
 DB_TYPE=sqlite
-SQLITE_FILE=/data/novel_app.db
-UPLOAD_DIR=/data/uploads
+SQLITE_FILE=./novel_app.db
+UPLOAD_DIR=./uploads
 JWT_SECRET=<long-random-string>
 ADMIN_USERNAME=admin_Supun
 ADMIN_PASSWORD=<strong-password>
 ```
 
-4. Use a **persistent volume** on the Space if available so SQLite + uploads survive rebuilds.  
-   If not, data resets on rebuild — acceptable for demos; for durable free DB later use Turso/Neon free tier.
+### 4. Important free-tier limits
+- Service **sleeps after ~15 minutes** with no traffic.
+- First request after sleep can take **30–60 seconds** (cold start).
+- Disk is **ephemeral**: SQLite + uploads can reset on redeploy.
+  For demos this is OK. For lasting data later: Turso / Neon free, or paid disk.
 
-5. Dockerfile in `backend/` should expose port 7860 (HF default) or map correctly.
-
-6. After deploy, API base is:
+### 5. After deploy
+API URL looks like:
 
 ```
-https://YOUR_USERNAME-YOUR_SPACE.hf.space
+https://novel-mobile-app-xxxx.onrender.com
 ```
 
-7. Flutter release already falls back to production URL in `api_service.dart`. Update that constant if your Space URL differs.
+Test: open that URL in a browser → should return backend health JSON.
+
+### 6. Flutter → live API
+
+Debug:
+
+```bat
+flutter run --dart-define=API_BASE_URL=https://YOUR-SERVICE.onrender.com
+```
+
+Release: update production fallback in `lib/data/services/api_service.dart`:
+
+```dart
+static const String _productionApiBaseUrl =
+    'https://YOUR-SERVICE.onrender.com';
+```
 
 ---
 
-## Same code, both environments
+## Optional: free Postgres later (not required)
 
-- `DB_TYPE=sqlite` locally and on HF → one code path.
-- Optional later: `DB_TYPE=mysql` + free/cloud MySQL without changing app routes.
-- Reading-list APIs, bootstrap, and seeds run on startup for both.
+If you outgrow SQLite on free hosts:
+
+1. Create free DB at [Neon](https://neon.tech) (no card for free tier).
+2. This project currently has **MySQL** drivers, not Postgres.
+   To use Neon you’d need a small adapter or stick with **MySQL** on a free/cheap host.
+3. Simplest path: stay on **SQLite** for free hosting.
 
 ---
 
-## Fix Git conflict first (Windows)
+## Same code, local + live
 
-You are mid-rebase on `.env.example` only.
+| Setting | Local | Render free |
+|---------|-------|-------------|
+| `DB_TYPE` | `sqlite` | `sqlite` |
+| App code | same | same |
+| Port | 8000 | `$PORT` / 7860 in Docker |
+| Data file | `./novel_app.db` | `./novel_app.db` (ephemeral on free) |
 
-```bat
-cd C:\lakmal_code\novel_mobile_app
+Reading lists, bootstrap, seeds, and uploads all work on both.
 
-REM Take the remote version of the conflicted file
-git checkout --theirs backend/.env.example
-git add backend/.env.example
+---
 
-REM Continue rebase
-git rebase --continue
+## Git status check
 
-REM If an editor opens for the commit message, save and close
-REM If more conflicts appear, fix each file then: git add <file> && git rebase --continue
-
-REM When rebase finishes:
-git push origin main
-```
-
-If rebase is too messy and you are OK discarding local-only commits on main:
+If your PC is clean:
 
 ```bat
-git rebase --abort
-git fetch origin
-git reset --hard origin/main
+git status
+git pull origin main
 ```
 
-Then re-copy fixed `backend/app/main.py` and `backend/app/database.py` if needed.
+You should see: **up to date with origin/main**, working tree clean.
