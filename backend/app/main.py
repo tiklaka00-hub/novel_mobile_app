@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -15,14 +16,22 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import mysql.connector
+try:
+    import mysql.connector as mysql_connector
+except ModuleNotFoundError:
+    mysql_connector = None
 from pydantic import BaseModel
 
 from .database import (
     get_connection,
     initialize_database_if_needed,
     run_startup_migrations,
+    USE_SQLITE,
 )
+
+DB_INIT_EXCEPTIONS = (sqlite3.Error, FileNotFoundError, OSError, ValueError)
+if mysql_connector is not None:
+    DB_INIT_EXCEPTIONS = (mysql_connector.Error, sqlite3.Error, FileNotFoundError, OSError, ValueError)
 
 app = FastAPI(title="Novel Mobile Backend")
 LOGGER = logging.getLogger(__name__)
@@ -277,10 +286,14 @@ class VersionResponse(BaseModel):
     updated_at: str | None = None
 
 
+def _to_db_query(query: str) -> str:
+    return query.replace("%s", "?") if USE_SQLITE else query
+
+
 def fetch_all(query: str, params: tuple[Any, ...] | None = None):
     connection = get_connection()
-    cursor = connection.cursor(dictionary=True)
-    cursor.execute(query, params or ())
+    cursor = connection.cursor(dictionary=True) if not USE_SQLITE else connection.cursor()
+    cursor.execute(_to_db_query(query), params or ())
     rows = cursor.fetchall()
     cursor.close()
     connection.close()
@@ -290,13 +303,23 @@ def fetch_all(query: str, params: tuple[Any, ...] | None = None):
 def execute_write(query: str, params: tuple[Any, ...]):
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute(query, params)
+    cursor.execute(_to_db_query(query), params)
     connection.commit()
     last_id = cursor.lastrowid
     affected = cursor.rowcount
     cursor.close()
     connection.close()
     return last_id, affected
+
+
+def _serialize_db_datetime(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def _content_version_row() -> dict[str, Any]:
@@ -307,7 +330,7 @@ def _content_version_row() -> dict[str, Any]:
         row = rows[0]
         return {
             "value": row["key_value"],
-            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "updated_at": _serialize_db_datetime(row["updated_at"]),
         }
 
     value = str(uuid4())
@@ -322,14 +345,24 @@ def bump_content_version() -> dict[str, Any]:
     value = str(uuid4())
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO app_metadata (key_name, key_value)
-        VALUES ('content_version', %s)
-        ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)
-        """,
-        (value,),
-    )
+    if USE_SQLITE:
+        cursor.execute(
+            """
+            INSERT INTO app_metadata (key_name, key_value)
+            VALUES ('content_version', ?)
+            ON CONFLICT(key_name) DO UPDATE SET key_value = excluded.key_value
+            """,
+            (value,),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO app_metadata (key_name, key_value)
+            VALUES ('content_version', %s)
+            ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)
+            """,
+            (value,),
+        )
     connection.commit()
     cursor.close()
     connection.close()
@@ -614,7 +647,7 @@ def startup_initialize_database():
             LOGGER.info("Database tables were missing. Schema/data initialized automatically.")
         LOGGER.info("Startup migrations: %s", migration_report)
         _content_version_row()
-    except (mysql.connector.Error, FileNotFoundError, OSError, ValueError) as exc:
+    except DB_INIT_EXCEPTIONS as exc:
         LOGGER.exception("Automatic database initialization failed: %s", exc)
 
 
@@ -1087,7 +1120,7 @@ def get_chat_messages(user: dict[str, Any] = Depends(require_user)):
                 "id": row["id"],
                 "sender": row["sender"],
                 "message": row["message"],
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "created_at": _serialize_db_datetime(row["created_at"]),
             }
             for row in rows
         ]

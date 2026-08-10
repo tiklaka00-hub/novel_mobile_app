@@ -1,14 +1,24 @@
 import os
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
-import mysql.connector
-from dotenv import load_dotenv
+try:
+    import mysql.connector as mysql_connector
+except ModuleNotFoundError:
+    mysql_connector = None
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    load_dotenv = lambda *args, **kwargs: None
 
 # Load .env.local first (local dev environment), then fall back to .env
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_BACKEND_ROOT / ".env.local", override=False)
 load_dotenv(_BACKEND_ROOT / ".env", override=False)
+
+MYSQL_ERROR = mysql_connector.Error if mysql_connector is not None else Exception
 
 REQUIRED_TABLES = {
     "categories",
@@ -195,6 +205,24 @@ SEED_BOOKS = [
     ),
 ]
 
+DB_TYPE = os.getenv("DB_TYPE", "mysql").strip().lower()
+USE_SQLITE = DB_TYPE == "sqlite"
+SQLITE_FILE = Path(os.getenv("SQLITE_FILE", "./novel_app.db")).resolve()
+
+
+def _to_db_query(query: str) -> str:
+    return query.replace("%s", "?") if USE_SQLITE else query
+
+
+def _sqlite_table_exists(cursor, table_name: str) -> bool:
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+    return cursor.fetchone() is not None
+
+
+def _sqlite_column_exists(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    return any(row[1] == column_name for row in cursor.fetchall())
+
 
 def _split_sql_statements(sql_content: str) -> list[str]:
     statements: list[str] = []
@@ -223,10 +251,19 @@ def _split_sql_statements(sql_content: str) -> list[str]:
 
 def _ensure_database_exists() -> None:
     """Create the target database if it does not exist yet."""
+    if USE_SQLITE:
+        SQLITE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        connection = get_connection()
+        connection.close()
+        return
+
     ssl_disabled = os.getenv("MYSQL_SSL_DISABLED", "false").lower() == "true"
     db_name = os.getenv("MYSQL_DATABASE", "novel_app_db")
+    if mysql_connector is None:
+        raise RuntimeError("mysql.connector is not installed; install mysql-connector-python to use MySQL mode")
+
     try:
-        connection = mysql.connector.connect(
+        connection = mysql_connector.connect(
             host=os.getenv("MYSQL_HOST", "127.0.0.1"),
             port=int(os.getenv("MYSQL_PORT", "3306")),
             user=os.getenv("MYSQL_USER", "root"),
@@ -242,13 +279,29 @@ def _ensure_database_exists() -> None:
         connection.commit()
         cursor.close()
         connection.close()
-    except mysql.connector.Error as exc:
+    except MYSQL_ERROR as exc:
         # If we cannot even connect without a database, re-raise.
         raise exc
 
 
 def initialize_database_if_needed() -> bool:
     """Initialize schema/seed data on startup when required tables are missing."""
+    if USE_SQLITE:
+        connection = get_connection()
+        cursor = connection.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = {row["name"] for row in cursor.fetchall()}
+
+        if REQUIRED_TABLES.issubset(existing_tables):
+            cursor.close()
+            connection.close()
+            return False
+
+        _create_sqlite_schema(connection)
+        cursor.close()
+        connection.close()
+        return True
+
     init_sql = os.getenv("MYSQL_INIT_SQL", "setup_railway.sql")
     sql_path = Path(__file__).resolve().parents[1] / "sql" / init_sql
 
@@ -275,9 +328,9 @@ def initialize_database_if_needed() -> bool:
     for statement in statements:
         try:
             cursor.execute(statement)
-        except mysql.connector.Error as exc:
+        except MYSQL_ERROR as exc:
             # Ignore idempotent creation/seed issues to support partial environments.
-            if exc.errno not in (1050, 1062):
+            if getattr(exc, 'errno', None) not in (1050, 1062):
                 cursor.execute("SET FOREIGN_KEY_CHECKS=1")
                 connection.rollback()
                 cursor.close()
@@ -291,8 +344,389 @@ def initialize_database_if_needed() -> bool:
     return True
 
 
+def _create_sqlite_schema(connection) -> None:
+    cursor = connection.cursor()
+    cursor.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            topic_count INTEGER NOT NULL DEFAULT 0,
+            tab_group TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            description TEXT NOT NULL,
+            cover_path TEXT NOT NULL DEFAULT '',
+            accent_hex TEXT NOT NULL DEFAULT '#808080',
+            section_name TEXT NOT NULL,
+            status_text TEXT NOT NULL DEFAULT '',
+            rating REAL NOT NULL DEFAULT 0,
+            genre TEXT NOT NULL DEFAULT '',
+            primary_genre TEXT NOT NULL DEFAULT '',
+            secondary_genre TEXT NOT NULL DEFAULT '',
+            is_completed INTEGER NOT NULL DEFAULT 0,
+            cta_label TEXT NOT NULL DEFAULT 'Read now',
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            story_id INTEGER NOT NULL,
+            chapter_number INTEGER NOT NULL DEFAULT 1,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (story_id) REFERENCES books(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS library_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            reading_status TEXT NOT NULL,
+            updated_text TEXT NOT NULL,
+            chapters INTEGER NOT NULL DEFAULT 0,
+            primary_genre TEXT NOT NULL,
+            secondary_genre TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (book_id) REFERENCES books(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS write_screen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manage_tabs TEXT NOT NULL,
+            story_tabs TEXT NOT NULL,
+            filter_label TEXT NOT NULL,
+            sort_label TEXT NOT NULL,
+            empty_title TEXT NOT NULL,
+            empty_cta TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tab_name TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS menu_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_name TEXT NOT NULL,
+            section_order INTEGER NOT NULL DEFAULT 0,
+            label TEXT NOT NULL,
+            icon_name TEXT NOT NULL,
+            route_name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            display_name TEXT NOT NULL,
+            username TEXT NOT NULL,
+            following INTEGER NOT NULL DEFAULT 0,
+            followers INTEGER NOT NULL DEFAULT 0,
+            blocked INTEGER NOT NULL DEFAULT 0,
+            chapters_read INTEGER NOT NULL DEFAULT 0,
+            social_karma INTEGER NOT NULL DEFAULT 0,
+            day_streak INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS reading_lists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            story_count INTEGER NOT NULL DEFAULT 0,
+            cover_path TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name TEXT NOT NULL,
+            group_order INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL,
+            subtitle TEXT NOT NULL,
+            progress_label TEXT NOT NULL,
+            badge_value TEXT NOT NULL,
+            style TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    connection.commit()
+    cursor.close()
+
+
+def _run_startup_migrations_sqlite(connection) -> dict[str, int]:
+    cursor = connection.cursor()
+
+    result = {
+        "columns_added": 0,
+        "tables_added": 0,
+        "categories_added": 0,
+        "books_added": 0,
+        "assets_seeded": 0,
+    }
+
+    uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads")).resolve()
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _sqlite_table_exists(cursor, "app_metadata"):
+        cursor.execute(
+            """
+            CREATE TABLE app_metadata (
+                key_name TEXT PRIMARY KEY,
+                key_value TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    cursor.execute(
+        """
+        INSERT INTO app_metadata (key_name, key_value)
+        VALUES (?, ?)
+        ON CONFLICT(key_name) DO UPDATE SET key_value = excluded.key_value
+        """,
+        ("content_version", str(uuid4())),
+    )
+
+    if not _sqlite_table_exists(cursor, "chapters"):
+        cursor.execute(
+            """
+            CREATE TABLE chapters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                story_id INTEGER NOT NULL,
+                chapter_number INTEGER NOT NULL DEFAULT 1,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (story_id) REFERENCES books(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "chapters", "notes"):
+        cursor.execute("ALTER TABLE chapters ADD COLUMN notes TEXT")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "chapters", "submission_status"):
+        cursor.execute("ALTER TABLE chapters ADD COLUMN submission_status TEXT NOT NULL DEFAULT 'draft'")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "chapters", "scheduled_for"):
+        cursor.execute("ALTER TABLE chapters ADD COLUMN scheduled_for TEXT NULL")
+        result["columns_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "chapter_revisions"):
+        cursor.execute(
+            """
+            CREATE TABLE chapter_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                notes TEXT,
+                submission_status TEXT NOT NULL DEFAULT 'draft',
+                scheduled_for TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "support_requests"):
+        cursor.execute(
+            """
+            CREATE TABLE support_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                first_name TEXT NOT NULL,
+                issue TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                description TEXT NOT NULL,
+                device_type TEXT NOT NULL DEFAULT '',
+                attachment_path TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "app_users"):
+        cursor.execute(
+            """
+            CREATE TABLE app_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                provider TEXT NOT NULL DEFAULT 'google',
+                provider_subject TEXT,
+                display_name TEXT NOT NULL,
+                photo_url TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_login_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "library_entries", "user_id"):
+        cursor.execute("ALTER TABLE library_entries ADD COLUMN user_id INTEGER")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "books", "user_id"):
+        cursor.execute("ALTER TABLE books ADD COLUMN user_id INTEGER")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "reading_lists", "user_id"):
+        cursor.execute("ALTER TABLE reading_lists ADD COLUMN user_id INTEGER")
+        result["columns_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "chat_messages"):
+        cursor.execute(
+            """
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                sender TEXT NOT NULL DEFAULT 'user',
+                message TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "support_requests", "device_type"):
+        cursor.execute("ALTER TABLE support_requests ADD COLUMN device_type TEXT NOT NULL DEFAULT ''")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "support_requests", "attachment_path"):
+        cursor.execute("ALTER TABLE support_requests ADD COLUMN attachment_path TEXT")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "books", "primary_genre"):
+        cursor.execute("ALTER TABLE books ADD COLUMN primary_genre TEXT NOT NULL DEFAULT ''")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "books", "secondary_genre"):
+        cursor.execute("ALTER TABLE books ADD COLUMN secondary_genre TEXT NOT NULL DEFAULT ''")
+        result["columns_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "books", "is_completed"):
+        cursor.execute("ALTER TABLE books ADD COLUMN is_completed INTEGER NOT NULL DEFAULT 0")
+        result["columns_added"] += 1
+
+    cursor.execute("UPDATE books SET primary_genre = genre WHERE primary_genre = '' OR primary_genre IS NULL")
+
+    cursor.execute("SELECT id, cover_path FROM books WHERE cover_path LIKE ?", ("story_card_images/%",))
+    for row in cursor.fetchall():
+        book_id = row[0]
+        cover_path = row[1]
+        new_cover = "/uploads/" + Path(cover_path).name
+        cursor.execute("UPDATE books SET cover_path = ? WHERE id = ?", (new_cover, book_id))
+
+    for name, topic_count, tab_group, sort_order in SEED_CATEGORIES:
+        cursor.execute(
+            "SELECT id FROM categories WHERE name=? AND tab_group=? LIMIT 1",
+            (name, tab_group),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO categories (name, topic_count, tab_group, sort_order) VALUES (?, ?, ?, ?)",
+                (name, topic_count, tab_group, sort_order),
+            )
+            result["categories_added"] += 1
+
+    for (
+        title,
+        author,
+        description,
+        cover_path,
+        accent_hex,
+        section_name,
+        status_text,
+        rating,
+        primary_genre,
+        secondary_genre,
+        cta_label,
+        sort_order,
+        is_completed,
+    ) in SEED_BOOKS:
+        cursor.execute("SELECT id FROM books WHERE title=? LIMIT 1", (title,))
+        if cursor.fetchone() is None:
+            cursor.execute(
+                """
+                INSERT INTO books (
+                    title, author, description, cover_path, accent_hex, section_name, status_text,
+                    rating, genre, primary_genre, secondary_genre, cta_label, sort_order, is_completed
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    title,
+                    author,
+                    description,
+                    cover_path,
+                    accent_hex,
+                    section_name,
+                    status_text,
+                    rating,
+                    primary_genre,
+                    primary_genre,
+                    secondary_genre,
+                    cta_label,
+                    sort_order,
+                    is_completed,
+                ),
+            )
+            result["books_added"] += 1
+
+    static_story_dir = Path(__file__).resolve().parents[2] / "story_card_images"
+    if static_story_dir.exists():
+        for image_path in sorted(static_story_dir.glob("*")):
+            if not image_path.is_file():
+                continue
+            extension = image_path.suffix.lower()
+            if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+                continue
+
+            target_path = uploads_dir / image_path.name
+            if target_path.exists():
+                continue
+
+            target_path.write_bytes(image_path.read_bytes())
+            result["assets_seeded"] += 1
+
+    connection.commit()
+    cursor.close()
+    return result
+
+
 def run_startup_migrations() -> dict[str, int]:
     """Apply lightweight, idempotent migrations and baseline seed content."""
+    if USE_SQLITE:
+        connection = get_connection()
+        result = _run_startup_migrations_sqlite(connection)
+        connection.close()
+        return result
+
     connection = get_connection()
     cursor = connection.cursor()
 
@@ -584,10 +1018,23 @@ def run_startup_migrations() -> dict[str, int]:
 
 
 def get_connection():
+    if USE_SQLITE:
+        SQLITE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(
+            str(SQLITE_FILE),
+            detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
     # Use SSL by default for cloud MySQL (Railway uses caching_sha2_password over secure transport).
     # Set MYSQL_SSL_DISABLED=true only for local/non-SSL setups.
     ssl_disabled = os.getenv("MYSQL_SSL_DISABLED", "false").lower() == "true"
-    return mysql.connector.connect(
+    if mysql_connector is None:
+        raise RuntimeError("mysql.connector is not installed; install mysql-connector-python to use MySQL mode")
+
+    return mysql_connector.connect(
         host=os.getenv("MYSQL_HOST", "127.0.0.1"),
         port=int(os.getenv("MYSQL_PORT", "3306")),
         user=os.getenv("MYSQL_USER", "root"),
