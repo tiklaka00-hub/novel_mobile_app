@@ -25,14 +25,23 @@ class _LibraryScreenState extends State<LibraryScreen>
   late List<LibraryEntryModel> _entries;
   late List<ReadingListModel> _readingLists;
   bool _loading = false;
+  bool _listsLoading = false;
+  bool _entriesLoadedFromApi = false;
+  bool _listsLoadedFromApi = false;
 
-  List<LibraryEntryModel> get _currentEntries => _entries
-      .where((entry) => entry.readingStatus.toLowerCase() != 'completed')
-      .toList();
+  bool _isCompleted(LibraryEntryModel entry) {
+    final status = entry.readingStatus.toLowerCase().trim();
+    return status == 'completed' ||
+        status == 'complete' ||
+        status == 'finished' ||
+        status == 'done';
+  }
 
-  List<LibraryEntryModel> get _historyEntries => _entries
-      .where((entry) => entry.readingStatus.toLowerCase() == 'completed')
-      .toList();
+  List<LibraryEntryModel> get _currentEntries =>
+      _entries.where((entry) => !_isCompleted(entry)).toList();
+
+  List<LibraryEntryModel> get _historyEntries =>
+      _entries.where(_isCompleted).toList();
 
   @override
   void initState() {
@@ -53,36 +62,55 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _loadEntries() async {
-    setState(() {
-      _loading = true;
-    });
-    final rows = await widget.apiService.fetchLibraryEntries();
-    if (!mounted) return;
-    setState(() {
-      // Only replace entries when the API returned actual data.
-      // If the request failed (empty list due to 401/network),
-      // keep the bootstrap fallback data so the tab is never blank.
-      if (rows.isNotEmpty) {
+    setState(() => _loading = true);
+    try {
+      final rows = await widget.apiService.fetchLibraryEntries();
+      if (!mounted) return;
+      setState(() {
+        // Once API responds successfully, always trust live data
+        // (including empty) so seed bootstrap does not stick forever.
         _entries = rows.map((row) => LibraryEntryModel.fromMap(row)).toList();
-      }
-      _loading = false;
-    });
+        _entriesLoadedFromApi = true;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        // Keep bootstrap only if we never got a successful API response.
+        if (!_entriesLoadedFromApi) {
+          _entries = List<LibraryEntryModel>.from(widget.data.libraryEntries);
+        }
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _loadReadingLists() async {
-    final rows = await widget.apiService.fetchReadingLists();
-    if (!mounted) {
-      return;
-    }
-    // Only replace reading lists when the API returned actual data.
-    // Otherwise keep the bootstrap fallback data.
-    if (rows.isNotEmpty) {
+    setState(() => _listsLoading = true);
+    try {
+      final rows = await widget.apiService.fetchReadingLists();
+      if (!mounted) return;
       setState(() {
-        _readingLists = rows
-            .map((row) => ReadingListModel.fromMap(row))
-            .toList();
+        _readingLists =
+            rows.map((row) => ReadingListModel.fromMap(row)).toList();
+        _listsLoadedFromApi = true;
+        _listsLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        if (!_listsLoadedFromApi) {
+          _readingLists = List<ReadingListModel>.from(
+            widget.data.profile.readingLists,
+          );
+        }
+        _listsLoading = false;
       });
     }
+  }
+
+  Future<void> _refreshAll() async {
+    await Future.wait([_loadEntries(), _loadReadingLists()]);
   }
 
   Future<void> _createReadingList() async {
@@ -95,6 +123,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(hintText: 'List name'),
+          onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
         ),
         actions: [
           TextButton(
@@ -108,46 +137,64 @@ class _LibraryScreenState extends State<LibraryScreen>
         ],
       ),
     );
-    // Do not dispose the controller here — disposing it immediately after
-    // `showDialog` can cause the TextField to be used after disposal during
-    // framework animation/update callbacks. Letting it be GC'd avoids
-    // intermittent "used after being disposed" errors.
 
-    if (name == null || name.trim().isEmpty) {
-      return;
+    if (name == null || name.trim().isEmpty) return;
+
+    try {
+      // Backend ReadingListCreateRequest is user-scoped (auth token).
+      // Do not send profile_id — server sets user_id from the token.
+      await widget.apiService.createReadingList({
+        'name': name.trim(),
+        'story_count': 0,
+        'cover_path': '',
+        'sort_order': _readingLists.length + 1,
+      });
+      await _loadReadingLists();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Reading list created')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not create list: $e')),
+        );
+      }
     }
-
-    await widget.apiService.createReadingList({
-      'profile_id': 1,
-      'name': name.trim(),
-      'story_count': 0,
-      'cover_path': '',
-      'sort_order': _readingLists.length + 1,
-    });
-    await _loadReadingLists();
   }
 
   Future<void> _removeEntry(LibraryEntryModel entry) async {
-    await widget.apiService.deleteLibraryEntry(entry.id);
-    if (mounted) {
-      _loadEntries();
+    try {
+      await widget.apiService.deleteLibraryEntry(entry.id);
+      if (mounted) await _loadEntries();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not delete: $e')),
+        );
+      }
     }
   }
 
   Future<void> _changeStatus(LibraryEntryModel entry) async {
-    final nextStatus = entry.readingStatus.toLowerCase() == 'completed'
-        ? 'Reading'
-        : 'Completed';
+    final nextStatus = _isCompleted(entry) ? 'Reading' : 'Completed';
 
-    await widget.apiService.updateLibraryEntry(entry.id, {
-      'reading_status': nextStatus,
-      'updated_text': entry.updatedText,
-      'chapters': entry.chapters,
-      'primary_genre': entry.primaryGenre,
-      'secondary_genre': entry.secondaryGenre,
-    });
-    if (mounted) {
-      _loadEntries();
+    try {
+      await widget.apiService.updateLibraryEntry(entry.id, {
+        'reading_status': nextStatus,
+        'updated_text': entry.updatedText,
+        'chapters': entry.chapters,
+        'primary_genre': entry.primaryGenre,
+        'secondary_genre': entry.secondaryGenre,
+      });
+      if (mounted) await _loadEntries();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update status: $e')),
+        );
+      }
     }
   }
 
@@ -156,40 +203,35 @@ class _LibraryScreenState extends State<LibraryScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 18, 24, 16),
           child: Text(
             'Library',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontSize: 26,
-              fontWeight: FontWeight.w600,
-            ),
+                  fontSize: 26,
+                  fontWeight: FontWeight.w600,
+                ),
           ),
         ),
-
-        // Tabs
         TabBar(
           controller: _tabController,
           labelColor: AppTheme.brand,
           unselectedLabelColor: AppTheme.muted,
           indicatorColor: AppTheme.brand,
-          labelStyle: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+          labelStyle: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(fontWeight: FontWeight.w500),
           tabs: const [
             Tab(text: 'Current Reads'),
             Tab(text: 'Reading Lists'),
             Tab(text: 'History'),
           ],
         ),
-
-        // Tab content
         Expanded(
           child: TabBarView(
             controller: _tabController,
             children: [
-              // Current Reads
               _CurrentReadsTab(
                 entries: _currentEntries,
                 apiService: widget.apiService,
@@ -197,19 +239,20 @@ class _LibraryScreenState extends State<LibraryScreen>
                 onDelete: _removeEntry,
                 onToggleStatus: _changeStatus,
                 onOpenDiscover: widget.onOpenDiscover,
+                onRefresh: _refreshAll,
               ),
-
-              // Reading Lists
               _ReadingListsTab(
                 lists: _readingLists,
                 apiService: widget.apiService,
+                loading: _listsLoading,
                 onCreateList: _createReadingList,
+                onRefresh: _refreshAll,
               ),
-
-              // History
               _HistoryTab(
                 entries: _historyEntries,
                 apiService: widget.apiService,
+                loading: _loading,
+                onRefresh: _refreshAll,
               ),
             ],
           ),
@@ -227,6 +270,7 @@ class _CurrentReadsTab extends StatelessWidget {
     required this.onDelete,
     required this.onToggleStatus,
     required this.onOpenDiscover,
+    required this.onRefresh,
   });
 
   final List<LibraryEntryModel> entries;
@@ -235,66 +279,81 @@ class _CurrentReadsTab extends StatelessWidget {
   final ValueChanged<LibraryEntryModel> onDelete;
   final ValueChanged<LibraryEntryModel> onToggleStatus;
   final VoidCallback onOpenDiscover;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
-      children: [
-        Text(
-          'My Books',
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            fontSize: 18,
-            fontWeight: FontWeight.w500,
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
+        children: [
+          Text(
+            'My Books',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
           ),
-        ),
-        const SizedBox(height: 18),
-        if (loading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 80),
-            child: Center(child: CircularProgressIndicator()),
-          )
-        else if (entries.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 40),
-            child: Center(
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.menu_book_outlined,
-                    size: 48,
-                    color: AppTheme.muted.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No books in your library yet',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: AppTheme.muted),
-                  ),
-                ],
+          const SizedBox(height: 18),
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 80),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (entries.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.menu_book_outlined,
+                      size: 48,
+                      color: AppTheme.muted.withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No books in your library yet',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.copyWith(color: AppTheme.muted),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Add stories from Discover, or mark them as Reading.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: AppTheme.muted),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            ...entries.map(
+              (entry) => _LibraryEntryTile(
+                entry: entry,
+                apiService: apiService,
+                onDelete: () => onDelete(entry),
+                onToggleStatus: () => onToggleStatus(entry),
               ),
             ),
-          )
-        else
-          ...entries.map(
-            (entry) => _LibraryEntryTile(
-              entry: entry,
-              apiService: apiService,
-              onDelete: () => onDelete(entry),
-              onToggleStatus: () => onToggleStatus(entry),
+          const SizedBox(height: 26),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: onOpenDiscover,
+              icon: const Icon(Icons.auto_stories_outlined),
+              label: const Text('Discover more stories'),
             ),
           ),
-        const SizedBox(height: 26),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: onOpenDiscover,
-            icon: const Icon(Icons.auto_stories_outlined),
-            label: const Text('Discover more stories'),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -303,129 +362,173 @@ class _ReadingListsTab extends StatelessWidget {
   const _ReadingListsTab({
     required this.lists,
     required this.apiService,
+    required this.loading,
     required this.onCreateList,
+    required this.onRefresh,
   });
 
   final List<ReadingListModel> lists;
   final ApiService apiService;
+  final bool loading;
   final Future<void> Function() onCreateList;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
-      children: [
-        Text(
-          'Private Reading Lists',
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            fontSize: 18,
-            fontWeight: FontWeight.w500,
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
+        children: [
+          Text(
+            'Private Reading Lists',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
           ),
-        ),
-        const SizedBox(height: 18),
-        if (lists.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 40),
-            child: Center(
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.library_books_outlined,
-                    size: 48,
-                    color: AppTheme.muted.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No reading lists yet',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: AppTheme.muted),
-                  ),
-                ],
+          const SizedBox(height: 18),
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 80),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (lists.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.library_books_outlined,
+                      size: 48,
+                      color: AppTheme.muted.withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No reading lists yet',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.copyWith(color: AppTheme.muted),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Create a list to organize stories you want to read.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: AppTheme.muted),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          )
-        else
-          ...lists.asMap().entries.map(
-            (entry) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _ReadingListRowCard(
-                list: entry.value,
-                index: entry.key,
-                apiService: apiService,
-              ),
+            )
+          else
+            ...lists.asMap().entries.map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _ReadingListRowCard(
+                      list: entry.value,
+                      index: entry.key,
+                      apiService: apiService,
+                    ),
+                  ),
+                ),
+          const SizedBox(height: 26),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => onCreateList(),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Create New List'),
             ),
           ),
-        const SizedBox(height: 26),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: onCreateList,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Create New List'),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
 class _HistoryTab extends StatelessWidget {
-  const _HistoryTab({required this.entries, required this.apiService});
+  const _HistoryTab({
+    required this.entries,
+    required this.apiService,
+    required this.loading,
+    required this.onRefresh,
+  });
 
   final List<LibraryEntryModel> entries;
   final ApiService apiService;
+  final bool loading;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
-      children: [
-        Text(
-          'Reading History',
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            fontSize: 18,
-            fontWeight: FontWeight.w500,
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
+        children: [
+          Text(
+            'Reading History',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
           ),
-        ),
-        const SizedBox(height: 18),
-        if (entries.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 40),
-            child: Center(
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.history_outlined,
-                    size: 48,
-                    color: AppTheme.muted.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Your reading history appears here',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: AppTheme.muted),
-                  ),
-                ],
-              ),
-            ),
-          )
-        else
-          ...entries
-              .where(
-                (entry) => entry.readingStatus.toLowerCase() == 'completed',
-              )
-              .map(
-                (entry) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _HistoryEntryCard(
-                    entry: entry,
-                    apiService: apiService,
-                  ),
+          const SizedBox(height: 8),
+          Text(
+            'Mark a book as Completed from Current Reads (menu → Toggle Status) to see it here.',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: AppTheme.muted),
+          ),
+          const SizedBox(height: 18),
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 80),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (entries.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.history_outlined,
+                      size: 48,
+                      color: AppTheme.muted.withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Your reading history appears here',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.copyWith(color: AppTheme.muted),
+                    ),
+                  ],
                 ),
               ),
-      ],
+            )
+          else
+            ...entries.map(
+              (entry) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _HistoryEntryCard(
+                  entry: entry,
+                  apiService: apiService,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -471,9 +574,10 @@ class _HistoryEntryCard extends StatelessWidget {
                   entry.book.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -487,14 +591,29 @@ class _HistoryEntryCard extends StatelessWidget {
                   '${entry.updatedText}  •  ${entry.primaryGenre}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: AppTheme.muted),
                 ),
               ],
             ),
           ),
-          const Icon(Icons.more_vert_rounded, size: 18, color: AppTheme.muted),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppTheme.brand.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'Completed',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppTheme.brand,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                  ),
+            ),
+          ),
         ],
       ),
     );
@@ -517,13 +636,18 @@ class _LibraryEntryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _hexToColor(entry.book.accentHex);
+    final status = entry.readingStatus.toLowerCase().trim();
+    final completed = status == 'completed' ||
+        status == 'complete' ||
+        status == 'finished' ||
+        status == 'done' ||
+        status.contains('complet');
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 18),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Book cover
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: SizedBox(
@@ -540,8 +664,6 @@ class _LibraryEntryTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 14),
-
-          // Book info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -552,10 +674,10 @@ class _LibraryEntryTile extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontSize: 16,
-                    fontFamily: 'serif',
-                    fontWeight: FontWeight.w600,
-                  ),
+                        fontSize: 16,
+                        fontFamily: 'serif',
+                        fontWeight: FontWeight.w600,
+                      ),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -563,22 +685,19 @@ class _LibraryEntryTile extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF555555),
-                  ),
+                        color: const Color(0xFF555555),
+                      ),
                 ),
                 const SizedBox(height: 8),
-
-                // Status and metadata
                 Wrap(
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    // Reading status
-                    if (entry.readingStatus.toLowerCase() == 'completed')
+                    if (completed)
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
+                          const Icon(
                             Icons.done_all_rounded,
                             color: AppTheme.brand,
                             size: 14,
@@ -586,8 +705,13 @@ class _LibraryEntryTile extends StatelessWidget {
                           const SizedBox(width: 4),
                           Text(
                             'Completed',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: AppTheme.brand, fontSize: 12),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                  color: AppTheme.brand,
+                                  fontSize: 12,
+                                ),
                           ),
                         ],
                       )
@@ -595,7 +719,7 @@ class _LibraryEntryTile extends StatelessWidget {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
+                          const Icon(
                             Icons.access_time,
                             color: AppTheme.muted,
                             size: 14,
@@ -605,63 +729,58 @@ class _LibraryEntryTile extends StatelessWidget {
                             entry.readingStatus,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(
-                              context,
-                            ).textTheme.bodySmall?.copyWith(fontSize: 12),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(fontSize: 12),
                           ),
                         ],
                       ),
-
-                    // Chapters
                     Text(
                       '${entry.chapters} Chapters',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF555555),
-                        fontSize: 12,
-                      ),
+                            color: const Color(0xFF555555),
+                            fontSize: 12,
+                          ),
                     ),
-
-                    // Primary genre
                     if (entry.primaryGenre.isNotEmpty)
                       Text(
                         entry.primaryGenre,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF555555),
-                          fontSize: 12,
-                        ),
+                              color: const Color(0xFF555555),
+                              fontSize: 12,
+                            ),
                       ),
-
-                    // Secondary genre
                     if (entry.secondaryGenre.isNotEmpty)
                       Text(
                         entry.secondaryGenre,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF555555),
-                          fontSize: 12,
-                        ),
+                              color: const Color(0xFF555555),
+                              fontSize: 12,
+                            ),
                       ),
                   ],
                 ),
               ],
             ),
           ),
-
-          // More options
           PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'status') {
-                onToggleStatus();
-              } else if (value == 'delete') {
-                onDelete();
-              }
+              if (value == 'status') onToggleStatus();
+              if (value == 'delete') onDelete();
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'status', child: Text('Toggle Status')),
-              PopupMenuItem(value: 'delete', child: Text('Delete')),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'status',
+                child: Text(
+                  completed ? 'Mark as Reading' : 'Mark as Completed',
+                ),
+              ),
+              const PopupMenuItem(value: 'delete', child: Text('Delete')),
             ],
             icon: const Icon(Icons.more_vert_rounded, color: AppTheme.brand),
           ),
@@ -715,16 +834,18 @@ class _ReadingListRowCard extends StatelessWidget {
               children: [
                 Text(
                   list.name,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '${list.storyCount} stories',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: AppTheme.muted),
                 ),
               ],
             ),
@@ -757,5 +878,6 @@ class _BookCoverFallback extends StatelessWidget {
 
 Color _hexToColor(String hex) {
   final normalized = hex.replaceAll('#', '');
+  if (normalized.length != 6) return const Color(0xFFA1A1A1);
   return Color(int.parse('FF$normalized', radix: 16));
 }

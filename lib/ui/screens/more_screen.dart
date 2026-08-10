@@ -38,6 +38,7 @@ class MoreScreen extends StatelessWidget {
                     builder: (_) => ProfileScreen(
                       profile: data.profile,
                       apiService: apiService,
+                      achievements: data.achievements,
                     ),
                   ),
                 );
@@ -51,7 +52,10 @@ class MoreScreen extends StatelessWidget {
                 return;
               }
 
-              if (routeName.contains('support') || routeName.contains('help') || label.contains('support') || label.contains('request')) {
+              if (routeName.contains('support') ||
+                  routeName.contains('help') ||
+                  label.contains('support') ||
+                  label.contains('request')) {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => SupportScreen(
@@ -96,7 +100,8 @@ class _AccountCard extends StatelessWidget {
           CircleAvatar(
             radius: 24,
             backgroundColor: AppTheme.brand.withValues(alpha: 0.12),
-            backgroundImage: session.photoUrl != null && session.photoUrl!.isNotEmpty
+            backgroundImage:
+                session.photoUrl != null && session.photoUrl!.isNotEmpty
                 ? NetworkImage(session.photoUrl!)
                 : null,
             child: session.photoUrl == null || session.photoUrl!.isEmpty
@@ -126,10 +131,7 @@ class _AccountCard extends StatelessWidget {
               ],
             ),
           ),
-          TextButton(
-            onPressed: onSignOut,
-            child: const Text('Log out'),
-          ),
+          TextButton(onPressed: onSignOut, child: const Text('Log out')),
         ],
       ),
     );

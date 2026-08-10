@@ -75,6 +75,13 @@ class LibraryUpdateRequest(BaseModel):
     secondary_genre: str | None = None
 
 
+class ReadingListCreateRequest(BaseModel):
+    name: str
+    story_count: int = 0
+    cover_path: str = ""
+    sort_order: int = 999
+
+
 class StoryCreateRequest(BaseModel):
     title: str
     author: str
@@ -513,15 +520,21 @@ def _public_image_path(filename: str) -> str:
 def _normalize_cover_path(path: str | None) -> str:
     if not path:
         return ""
-    if path.startswith(("http://", "https://", "/uploads/")):
-        return path
-    # Handle both "story_card_images/..." and "assets/story_card_images/..."
-    # (legacy paths from older DB seeds)
-    if "story_card_images/" in path:
-        return _public_image_path(path.split("/")[-1])
-    if "/" not in path:
-        return _public_image_path(path)
-    return path
+    raw = str(path).strip()
+    if not raw:
+        return ""
+    if raw.startswith(("http://", "https://")):
+        return raw
+    # Already a public uploads path
+    if raw.startswith("/uploads/"):
+        return raw
+    # Legacy: story_card_images/... or assets/story_card_images/...
+    if "story_card_images/" in raw:
+        return _public_image_path(raw.split("/")[-1])
+    # Bare filename or uploads/filename without leading slash
+    if "/" not in raw or raw.startswith("uploads/"):
+        return _public_image_path(raw.split("/")[-1])
+    return raw
 
 
 def _available_story_images() -> list[dict[str, str]]:
@@ -786,6 +799,59 @@ def authenticate_guest(_: GuestAuthRequest):
     }
 
 
+@app.get("/api/me")
+def get_me(user: dict[str, Any] = Depends(require_user)):
+    rows = fetch_all(
+        "SELECT id, email, display_name, photo_url, provider FROM app_users WHERE id=%s LIMIT 1",
+        (user["user_id"],),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found")
+    u = rows[0]
+    story_count_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM books WHERE user_id=%s",
+        (user["user_id"],),
+    )
+    library_count_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM library_entries WHERE user_id=%s",
+        (user["user_id"],),
+    )
+    reading_list_count_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM reading_lists WHERE user_id=%s",
+        (user["user_id"],),
+    )
+    completed_rows = fetch_all(
+        """
+        SELECT COUNT(*) AS c FROM library_entries
+        WHERE user_id=%s AND LOWER(reading_status) IN ('completed', 'complete', 'finished', 'done')
+        """,
+        (user["user_id"],),
+    )
+    story_count = int(story_count_rows[0]["c"]) if story_count_rows else 0
+    library_count = int(library_count_rows[0]["c"]) if library_count_rows else 0
+    reading_list_count = int(reading_list_count_rows[0]["c"]) if reading_list_count_rows else 0
+    completed_count = int(completed_rows[0]["c"]) if completed_rows else 0
+    display_name = u.get("display_name") or (u.get("email") or "Reader").split("@")[0]
+    username = "@" + display_name.lower().replace(" ", "")
+    return {
+        "id": u["id"],
+        "email": u.get("email") or "",
+        "display_name": display_name,
+        "username": username,
+        "photo_url": u.get("photo_url") or "",
+        "provider": u.get("provider") or "",
+        "following": 0,
+        "followers": 0,
+        "blocked": 0,
+        "chapters_read": completed_count,
+        "social_karma": story_count * 10,
+        "day_streak": 0,
+        "story_count": story_count,
+        "library_count": library_count,
+        "reading_list_count": reading_list_count,
+    }
+
+
 @app.get("/api/admin/session")
 def admin_session(_: dict[str, Any] = Depends(require_admin)):
     return {"ok": True, "username": ADMIN_USERNAME}
@@ -1042,19 +1108,37 @@ def search_stories(
     limit: int = Query(default=40, ge=1, le=100),
 ):
     q = "%" + query.strip() + "%"
-    g = "%" + genre.strip() + "%"
-    rows = fetch_all(
-        """
-        SELECT id, title, author, description, cover_path, accent_hex, status_text, rating, genre
-        FROM books
-        WHERE (title LIKE %s OR author LIKE %s)
-          AND genre LIKE %s
-          AND rating >= %s
-        ORDER BY rating DESC, id DESC
-        LIMIT %s
-        """,
-        (q, q, g, min_rating, limit),
-    )
+    g = genre.strip()
+    if g:
+        g_like = "%" + g + "%"
+        rows = fetch_all(
+            """
+            SELECT id, title, author, description, cover_path, accent_hex, status_text, rating, genre
+            FROM books
+            WHERE (title LIKE %s OR author LIKE %s OR description LIKE %s)
+              AND (
+                    genre LIKE %s
+                 OR COALESCE(primary_genre, '') LIKE %s
+                 OR COALESCE(secondary_genre, '') LIKE %s
+              )
+              AND rating >= %s
+            ORDER BY rating DESC, id DESC
+            LIMIT %s
+            """,
+            (q, q, q, g_like, g_like, g_like, min_rating, limit),
+        )
+    else:
+        rows = fetch_all(
+            """
+            SELECT id, title, author, description, cover_path, accent_hex, status_text, rating, genre
+            FROM books
+            WHERE (title LIKE %s OR author LIKE %s OR description LIKE %s)
+              AND rating >= %s
+            ORDER BY rating DESC, id DESC
+            LIMIT %s
+            """,
+            (q, q, q, min_rating, limit),
+        )
     return {
         "items": [
             {**row, "cover_path": _normalize_cover_path(row["cover_path"])}
@@ -1257,25 +1341,42 @@ def delete_library_entry(entry_id: int, user: dict[str, Any] = Depends(require_u
 
 
 @app.get("/api/reading-lists")
-def get_public_reading_lists():
+def get_public_reading_lists(user: dict[str, Any] = Depends(require_user)):
     rows = fetch_all(
-        "SELECT id, profile_id, name, story_count, cover_path, sort_order FROM reading_lists ORDER BY sort_order, id"
+        """
+        SELECT id, profile_id, name, story_count, cover_path, sort_order
+        FROM reading_lists
+        WHERE user_id = %s OR (user_id IS NULL AND profile_id = 1)
+        ORDER BY sort_order, id
+        """,
+        (user["user_id"],),
     )
-    return {"items": rows}
+    return {
+        "items": [
+            {**row, "cover_path": _normalize_cover_path(row.get("cover_path"))}
+            for row in rows
+        ]
+    }
 
 
 @app.post("/api/reading-lists")
-def create_public_reading_list(payload: AdminReadingListCreateRequest):
+def create_public_reading_list(
+    payload: ReadingListCreateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Reading list name is required")
     row_id, _ = execute_write(
         """
-        INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO reading_lists (user_id, profile_id, name, story_count, cover_path, sort_order)
+        VALUES (%s, 1, %s, %s, %s, %s)
         """,
         (
-            payload.profile_id,
-            payload.name,
+            user["user_id"],
+            name,
             payload.story_count,
-            payload.cover_path,
+            _normalize_cover_path(payload.cover_path),
             payload.sort_order,
         ),
     )
@@ -1284,13 +1385,15 @@ def create_public_reading_list(payload: AdminReadingListCreateRequest):
 
 
 @app.get("/api/write/stories")
-def get_writer_stories():
+def get_writer_stories(user: dict[str, Any] = Depends(require_user)):
     rows = fetch_all(
         """
         SELECT id, title, author, description, genre, status_text, cover_path, accent_hex
         FROM books
+        WHERE user_id = %s
         ORDER BY id DESC
-        """
+        """,
+        (user["user_id"],),
     )
     return {
         "items": [
@@ -1460,17 +1563,26 @@ def delete_story_chapter(chapter_id: int):
 
 
 @app.post("/api/write/stories")
-def create_writer_story(payload: StoryCreateRequest):
+def create_writer_story(
+    payload: StoryCreateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    cover = _normalize_cover_path(payload.cover_path)
     story_id, _ = execute_write(
         """
-        INSERT INTO books (title, author, description, cover_path, accent_hex, section_name, status_text, rating, genre, cta_label, sort_order)
-        VALUES (%s, %s, %s, %s, '#557E7A', 'recently_updated', 'Draft', 0.0, %s, 'Read now', 999)
+        INSERT INTO books (
+            user_id, title, author, description, cover_path, accent_hex, section_name,
+            status_text, rating, genre, primary_genre, cta_label, sort_order
+        )
+        VALUES (%s, %s, %s, %s, %s, '#557E7A', 'recently_updated', 'Draft', 0.0, %s, %s, 'Read now', 999)
         """,
         (
+            user["user_id"],
             payload.title,
             payload.author,
             payload.description,
-            payload.cover_path,
+            cover,
+            payload.genre,
             payload.genre,
         ),
     )
@@ -1479,16 +1591,28 @@ def create_writer_story(payload: StoryCreateRequest):
 
 
 @app.put("/api/write/stories/{story_id}")
-def update_writer_story(story_id: int, payload: StoryUpdateRequest):
-    rows = fetch_all("SELECT * FROM books WHERE id=%s", (story_id,))
+def update_writer_story(
+    story_id: int,
+    payload: StoryUpdateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    rows = fetch_all(
+        "SELECT * FROM books WHERE id=%s AND (user_id=%s OR user_id IS NULL)",
+        (story_id, user["user_id"]),
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="Story not found")
 
     current = rows[0]
+    next_cover = (
+        _normalize_cover_path(payload.cover_path)
+        if payload.cover_path is not None
+        else current["cover_path"]
+    )
     _, affected = execute_write(
         """
         UPDATE books
-        SET title=%s, author=%s, description=%s, genre=%s, cover_path=%s
+        SET title=%s, author=%s, description=%s, genre=%s, primary_genre=%s, cover_path=%s, user_id=%s
         WHERE id=%s
         """,
         (
@@ -1496,7 +1620,9 @@ def update_writer_story(story_id: int, payload: StoryUpdateRequest):
             payload.author or current["author"],
             payload.description or current["description"],
             payload.genre or current["genre"],
-            payload.cover_path if payload.cover_path is not None else current["cover_path"],
+            payload.genre or current.get("primary_genre") or current["genre"],
+            next_cover,
+            user["user_id"],
             story_id,
         ),
     )
@@ -1507,8 +1633,11 @@ def update_writer_story(story_id: int, payload: StoryUpdateRequest):
 
 
 @app.delete("/api/write/stories/{story_id}")
-def delete_writer_story(story_id: int):
-    _, affected = execute_write("DELETE FROM books WHERE id=%s", (story_id,))
+def delete_writer_story(story_id: int, user: dict[str, Any] = Depends(require_user)):
+    _, affected = execute_write(
+        "DELETE FROM books WHERE id=%s AND (user_id=%s OR user_id IS NULL)",
+        (story_id, user["user_id"]),
+    )
     if affected == 0:
         raise HTTPException(status_code=404, detail="Story not found")
     bump_content_version()

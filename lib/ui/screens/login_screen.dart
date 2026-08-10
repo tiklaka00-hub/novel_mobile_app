@@ -77,52 +77,66 @@ class LoginScreen extends StatelessWidget {
           ),
         ),
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 32, 24, 28),
-            child: Column(
-              children: [
-                const Spacer(),
-                Text(
-                  'Inkitt',
-                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontSize: 54,
-                    fontFamily: 'serif',
-                    fontWeight: FontWeight.w700,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 32, 24, 28),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const SizedBox(height: 64),
+                        Text(
+                          'Inkitt',
+                          style: Theme.of(context).textTheme.headlineLarge
+                              ?.copyWith(
+                                fontSize: 54,
+                                fontFamily: 'serif',
+                                fontWeight: FontWeight.w700,
+                              ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Discover Millions of Free Books',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(color: AppTheme.muted),
+                        ),
+                        const SizedBox(height: 52),
+                        _LoginButton(
+                          icon: Icons.g_mobiledata_rounded,
+                          label: 'Continue with Google',
+                          onPressed: () => onContinue('google'),
+                        ),
+                        const SizedBox(height: 12),
+                        _LoginButton(
+                          icon: Icons.email_outlined,
+                          label: 'Continue with Email',
+                          onPressed: () => _openEmailPrompt(context),
+                        ),
+                        const SizedBox(height: 12),
+                        _LoginButton(
+                          icon: Icons.person_outline,
+                          label: 'Continue without sign in',
+                          onPressed: () => onContinue('guest'),
+                        ),
+                        const SizedBox(height: 28),
+                        Text(
+                          'By continuing you agree to our Terms of Service and Privacy Policy.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'Discover Millions of Free Books',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(color: AppTheme.muted),
-                ),
-                const Spacer(),
-                _LoginButton(
-                  icon: Icons.g_mobiledata_rounded,
-                  label: 'Continue with Google',
-                  onPressed: () => onContinue('google'),
-                ),
-                const SizedBox(height: 12),
-                _LoginButton(
-                  icon: Icons.email_outlined,
-                  label: 'Continue with Email',
-                  onPressed: () => _openEmailPrompt(context),
-                ),
-                const SizedBox(height: 12),
-                _LoginButton(
-                  icon: Icons.person_outline,
-                  label: 'Continue without sign in',
-                  onPressed: () => onContinue('guest'),
-                ),
-                const SizedBox(height: 28),
-                Text(
-                  'By continuing you agree to our Terms of Service and Privacy Policy.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),

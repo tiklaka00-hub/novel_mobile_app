@@ -52,6 +52,7 @@ class _WriteScreenState extends State<WriteScreen>
   }
 
   Future<void> _reloadStories() async {
+    if (!mounted) return;
     setState(() {
       _storiesFuture = widget.apiService.fetchWriterStories();
     });
@@ -64,9 +65,8 @@ class _WriteScreenState extends State<WriteScreen>
             CreateStoryScreen(apiService: widget.apiService, story: story),
       ),
     );
-    if (result == true) {
-      await _reloadStories();
-    }
+    if (!mounted || result != true) return;
+    await _reloadStories();
   }
 
   Future<void> _openEditChapter(Map<String, dynamic> story) async {

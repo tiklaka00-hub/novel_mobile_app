@@ -77,19 +77,28 @@ class ApiService {
     if (path.isEmpty) {
       return path;
     }
-    if (path.startsWith('http://') || path.startsWith('https://')) {
-      return path;
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) {
+      return trimmed;
     }
-    // Handle both "story_card_images/..." and "assets/story_card_images/..."
-    // (legacy paths from older DB seeds)
-    if (path.contains('story_card_images/')) {
-      final filename = path.split('/').last;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    // Legacy: story_card_images/... or assets/story_card_images/...
+    if (trimmed.contains('story_card_images/')) {
+      final filename = trimmed.split('/').last;
       return '$_baseUrl/uploads/$filename';
     }
-    if (!path.startsWith('/')) {
-      return '$_baseUrl/$path';
+    // Bare filename (e.g. story15.jpg) or uploads/filename without leading slash
+    if (!trimmed.startsWith('/')) {
+      if (trimmed.startsWith('uploads/')) {
+        return '$_baseUrl/$trimmed';
+      }
+      // Treat as uploads file name
+      return '$_baseUrl/uploads/$trimmed';
     }
-    return '$_baseUrl$path';
+    // Absolute path on API host (e.g. /uploads/uuid.jpg)
+    return '$_baseUrl$trimmed';
   }
 
   Future<http.Response> _post(
@@ -172,6 +181,21 @@ class ApiService {
     return '';
   }
 
+  /// Live per-user profile (display name, story/library counts).
+  /// Requires auth token. Returns empty map if unauthenticated or offline.
+  Future<Map<String, dynamic>> fetchMe() async {
+    try {
+      final response = await _get(
+        '/api/me',
+        timeout: const Duration(seconds: 6),
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return const <String, dynamic>{};
+  }
+
   Future<Map<String, dynamic>> uploadWriterImage(
     Uint8List bytes,
     String filename,
@@ -180,6 +204,7 @@ class ApiService {
       'POST',
       Uri.parse('$_baseUrl/api/write/upload-image'),
     );
+    request.headers.addAll(_authHeaders);
     request.files.add(
       http.MultipartFile.fromBytes('file', bytes, filename: filename),
     );
@@ -205,6 +230,7 @@ class ApiService {
       'POST',
       Uri.parse('$_baseUrl/api/support/upload-attachment'),
     );
+    request.headers.addAll(_authHeaders);
     request.files.add(
       http.MultipartFile.fromBytes('file', bytes, filename: filename),
     );
@@ -321,6 +347,19 @@ class ApiService {
   Future<List<Map<String, dynamic>>> fetchLibraryEntries() async {
     try {
       final response = await _get('/api/library');
+      if (response.statusCode != 200) {
+        return const <Map<String, dynamic>>[];
+      }
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchChatMessages() async {
+    try {
+      final response = await _get('/api/chat/messages');
       if (response.statusCode != 200) {
         return const <Map<String, dynamic>>[];
       }
