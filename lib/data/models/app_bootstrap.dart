@@ -336,19 +336,22 @@ class ProfileModel {
 
 class ReadingListModel {
   const ReadingListModel({
+    required this.id,
     required this.name,
     required this.storyCount,
     required this.coverPath,
   });
 
+  final int id;
   final String name;
   final int storyCount;
   final String coverPath;
 
   factory ReadingListModel.fromMap(Map<String, dynamic> map) {
     return ReadingListModel(
+      id: (map['id'] as num?)?.toInt() ?? 0,
       name: map['name'] as String,
-      storyCount: map['story_count'] as int,
+      storyCount: (map['story_count'] as num?)?.toInt() ?? 0,
       coverPath: map['cover_path'] as String? ?? '',
     );
   }
