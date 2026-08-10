@@ -1,1 +1,456 @@
-PLACEHOLDER
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+
+import '../models/app_bootstrap.dart';
+
+class ApiService {
+  ApiService();
+
+  String? _authToken;
+
+  String? get authTokenForPersistence => _authToken;
+
+  void setAuthToken(String? token) {
+    _authToken = token;
+  }
+
+  static const String _productionApiBaseUrl =
+      'https://lakmasachith-novel-app-backend.hf.space';
+
+  static const String _overrideApiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: '',
+  );
+
+  String get _baseUrl {
+    if (_overrideApiBaseUrl.isNotEmpty) {
+      return _overrideApiBaseUrl;
+    }
+
+    if (kDebugMode) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        return 'http://10.0.2.2:8000';
+      }
+      return 'http://127.0.0.1:8000';
+    }
+
+    return _productionApiBaseUrl;
+  }
+
+  Map<String, String> get _authHeaders {
+    if (_authToken == null || _authToken!.isEmpty) {
+      return const <String, String>{};
+    }
+    return <String, String>{'Authorization': 'Bearer $_authToken'};
+  }
+
+  Future<http.Response> _requestWithHostFallback(
+    Future<http.Response> Function(String baseUrl) request,
+    Duration timeout,
+  ) async {
+    try {
+      return await request(_baseUrl).timeout(timeout);
+    } on http.ClientException {
+      if (_baseUrl == _productionApiBaseUrl) rethrow;
+      return request(_productionApiBaseUrl).timeout(timeout);
+    } on TimeoutException {
+      if (_baseUrl == _productionApiBaseUrl) rethrow;
+      return request(_productionApiBaseUrl).timeout(timeout);
+    }
+  }
+
+  Future<http.Response> _get(
+    String path, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.get(Uri.parse('$baseUrl$path'), headers: _authHeaders),
+      timeout,
+    );
+  }
+
+  String resolveAssetUrl(String path) {
+    if (path.isEmpty) return path;
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) return trimmed;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    if (trimmed.contains('story_card_images/')) {
+      final filename = trimmed.split('/').last;
+      return '$_baseUrl/uploads/$filename';
+    }
+    if (!trimmed.startsWith('/')) {
+      if (trimmed.startsWith('uploads/')) return '$_baseUrl/$trimmed';
+      return '$_baseUrl/uploads/$trimmed';
+    }
+    return '$_baseUrl$trimmed';
+  }
+
+  Future<http.Response> _post(
+    String path,
+    Object body, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.post(
+        Uri.parse('$baseUrl$path'),
+        headers: {'Content-Type': 'application/json', ..._authHeaders},
+        body: jsonEncode(body),
+      ),
+      timeout,
+    );
+  }
+
+  Future<http.Response> _put(
+    String path,
+    Object body, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.put(
+        Uri.parse('$baseUrl$path'),
+        headers: {'Content-Type': 'application/json', ..._authHeaders},
+        body: jsonEncode(body),
+      ),
+      timeout,
+    );
+  }
+
+  Future<http.Response> _delete(
+    String path, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) =>
+          http.delete(Uri.parse('$baseUrl$path'), headers: _authHeaders),
+      timeout,
+    );
+  }
+
+  void _ensureSuccessResponse(http.Response response) {
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(
+        'Backend request failed (${response.statusCode}): ${response.body}',
+      );
+    }
+  }
+
+  Future<AppBootstrap> fetchBootstrap() async {
+    try {
+      final response = await _get(
+        '/api/bootstrap',
+        timeout: const Duration(seconds: 5),
+      );
+      if (response.statusCode == 200) {
+        return AppBootstrap.fromMap(
+          jsonDecode(response.body) as Map<String, dynamic>,
+        );
+      }
+    } catch (_) {}
+    return AppBootstrap.fromMap(_fallbackData);
+  }
+
+  Future<String> fetchContentVersion() async {
+    try {
+      final response = await _get(
+        '/api/content/version',
+        timeout: const Duration(seconds: 5),
+      );
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        return payload['value']?.toString() ?? '';
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  Future<Map<String, dynamic>> fetchMe() async {
+    try {
+      final response = await _get('/api/me', timeout: const Duration(seconds: 6));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> uploadWriterImage(Uint8List bytes, String filename) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl/api/write/upload-image'));
+    request.headers.addAll(_authHeaders);
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 15));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> uploadSupportAttachment(Uint8List bytes, String filename) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl/api/support/upload-attachment'));
+    request.headers.addAll(_authHeaders);
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 15));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    return const <String, dynamic>{};
+  }
+
+  Future<List<Map<String, dynamic>>> fetchNotifications({String? tab}) async {
+    try {
+      final response = await _get(
+        '/api/notifications${tab != null && tab.trim().isNotEmpty ? '?tab=${Uri.encodeComponent(tab)}' : ''}',
+        timeout: const Duration(seconds: 7),
+      );
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+      }
+    } catch (_) {}
+    final fallback = (_fallbackData['notifications'] as List<dynamic>).where((item) {
+      if (tab == null || tab.trim().isEmpty) return true;
+      return (item as Map<String, dynamic>)['tab'] == tab;
+    }).map((item) => Map<String, dynamic>.from(item as Map<String, dynamic>)).toList();
+    return fallback;
+  }
+
+  Future<void> submitSupportRequest(Map<String, dynamic> payload) async {
+    final response = await _post('/api/support/requests', payload, timeout: const Duration(seconds: 10));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Unable to submit support request');
+    }
+  }
+
+  Future<Map<String, dynamic>> verifyGoogleSignIn({String? idToken, String? accessToken}) async {
+    final response = await _post('/api/auth/google', {
+      'id_token': idToken,
+      'access_token': accessToken,
+    }, timeout: const Duration(seconds: 12));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Unable to verify Google sign-in');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> verifyEmailSignIn(String email) async {
+    final response = await _post('/api/auth/email', {'email': email}, timeout: const Duration(seconds: 8));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Unable to verify email sign-in');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> verifyGuestSignIn() async {
+    final response = await _post('/api/auth/guest', const <String, dynamic>{}, timeout: const Duration(seconds: 8));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Unable to verify guest sign-in');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<List<Map<String, dynamic>>> searchStories({String query = '', String genre = '', double minRating = 0}) async {
+    try {
+      final uri = Uri(path: '/api/search', queryParameters: {
+        'query': query,
+        'genre': genre,
+        'min_rating': minRating.toString(),
+      });
+      final response = await _get('${uri.path}?${uri.query}');
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchLibraryEntries() async {
+    try {
+      final response = await _get('/api/library');
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchChatMessages() async {
+    try {
+      final response = await _get('/api/chat/messages');
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> addLibraryEntry(Map<String, dynamic> payload) async {
+    final response = await _post('/api/library', payload, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<void> updateLibraryEntry(int id, Map<String, dynamic> payload) async {
+    final response = await _put('/api/library/$id', payload, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<void> deleteLibraryEntry(int id) async {
+    final response = await _delete('/api/library/$id', timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchReadingLists() async {
+    try {
+      final response = await _get('/api/reading-lists');
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> createReadingList(Map<String, dynamic> payload) async {
+    final response = await _post('/api/reading-lists', payload, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<Map<String, dynamic>> fetchReadingListDetail(int listId) async {
+    final response = await _get('/api/reading-lists/$listId');
+    _ensureSuccessResponse(response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<void> addReadingListItem(int listId, int bookId) async {
+    final response = await _post('/api/reading-lists/$listId/items', {'book_id': bookId}, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<void> removeReadingListItem(int listId, int itemId) async {
+    final response = await _delete('/api/reading-lists/$listId/items/$itemId', timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<void> deleteReadingList(int listId) async {
+    final response = await _delete('/api/reading-lists/$listId', timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchWriterStories() async {
+    try {
+      final response = await _get('/api/write/stories', timeout: const Duration(seconds: 8));
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> createWriterStory(Map<String, dynamic> payload) async {
+    final response = await _post('/api/write/stories', payload, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<void> updateWriterStory(int id, Map<String, dynamic> payload) async {
+    final response = await _put('/api/write/stories/$id', payload, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<void> deleteWriterStory(int id) async {
+    final response = await _delete('/api/write/stories/$id', timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchStoryChapters(int storyId) async {
+    try {
+      final response = await _get('/api/write/stories/$storyId/chapters', timeout: const Duration(seconds: 8));
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<int?> createStoryChapter(int storyId, Map<String, dynamic> payload) async {
+    final response = await _post('/api/write/stories/$storyId/chapters', payload, timeout: const Duration(seconds: 8));
+    if (response.statusCode < 200 || response.statusCode >= 300) return null;
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return data['id'] as int?;
+  }
+
+  Future<void> updateStoryChapter(int chapterId, Map<String, dynamic> payload) async {
+    final response = await _put('/api/write/chapters/$chapterId', payload, timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchStoryChapterRevisions(int chapterId) async {
+    try {
+      final response = await _get('/api/write/chapters/$chapterId/revisions', timeout: const Duration(seconds: 8));
+      if (response.statusCode != 200) return const <Map<String, dynamic>>[];
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<void> deleteStoryChapter(int chapterId) async {
+    final response = await _delete('/api/write/chapters/$chapterId', timeout: const Duration(seconds: 8));
+    _ensureSuccessResponse(response);
+  }
+
+  static final Map<String, dynamic> _fallbackData = <String, dynamic>{
+    'discover_tabs': ['New', 'Popular', 'Fantasy', 'Fanfiction', 'Newsfeed'],
+    'recently_updated': [],
+    'recently_completed': [],
+    'discover_books': [],
+    'featured_book': {
+      'id': 1,
+      'title': 'Loading...',
+      'author': '',
+      'description': '',
+      'status_text': '',
+      'rating': 0,
+      'genre': '',
+      'cta': 'Read now',
+    },
+    'explore_topics': [],
+    'library_entries': [],
+    'write_screen': {
+      'manage_tabs': ['Manage Stories', 'Analytics'],
+      'story_tabs': ['Submitted', 'Drafts'],
+      'filter_label': 'All stories',
+      'sort_label': 'Recently Updated',
+      'empty_title': "You haven't submitted any story yet",
+      'empty_cta': 'Submit Stories',
+    },
+    'notifications': [],
+    'menu_sections': [],
+    'profile': {
+      'display_name': 'Reader',
+      'username': '@reader',
+      'following': 0,
+      'followers': 0,
+      'blocked': 0,
+      'chapters_read': 0,
+      'social_karma': 0,
+      'day_streak': 0,
+      'reading_lists': [],
+    },
+    'achievements': [],
+  };
+}
