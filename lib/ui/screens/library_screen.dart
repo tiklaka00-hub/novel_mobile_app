@@ -26,12 +26,22 @@ class _LibraryScreenState extends State<LibraryScreen>
   late List<ReadingListModel> _readingLists;
   bool _loading = false;
 
+  List<LibraryEntryModel> get _currentEntries => _entries
+      .where((entry) => entry.readingStatus.toLowerCase() != 'completed')
+      .toList();
+
+  List<LibraryEntryModel> get _historyEntries => _entries
+      .where((entry) => entry.readingStatus.toLowerCase() == 'completed')
+      .toList();
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _entries = List<LibraryEntryModel>.from(widget.data.libraryEntries);
-    _readingLists = List<ReadingListModel>.from(widget.data.profile.readingLists);
+    _readingLists = List<ReadingListModel>.from(
+      widget.data.profile.readingLists,
+    );
     _loadEntries();
     _loadReadingLists();
   }
@@ -49,7 +59,12 @@ class _LibraryScreenState extends State<LibraryScreen>
     final rows = await widget.apiService.fetchLibraryEntries();
     if (!mounted) return;
     setState(() {
-      _entries = rows.map((row) => LibraryEntryModel.fromMap(row)).toList();
+      // Only replace entries when the API returned actual data.
+      // If the request failed (empty list due to 401/network),
+      // keep the bootstrap fallback data so the tab is never blank.
+      if (rows.isNotEmpty) {
+        _entries = rows.map((row) => LibraryEntryModel.fromMap(row)).toList();
+      }
       _loading = false;
     });
   }
@@ -59,11 +74,15 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (!mounted) {
       return;
     }
-    setState(() {
-      _readingLists = rows
-          .map((row) => ReadingListModel.fromMap(row))
-          .toList();
-    });
+    // Only replace reading lists when the API returned actual data.
+    // Otherwise keep the bootstrap fallback data.
+    if (rows.isNotEmpty) {
+      setState(() {
+        _readingLists = rows
+            .map((row) => ReadingListModel.fromMap(row))
+            .toList();
+      });
+    }
   }
 
   Future<void> _createReadingList() async {
@@ -89,7 +108,10 @@ class _LibraryScreenState extends State<LibraryScreen>
         ],
       ),
     );
-    controller.dispose();
+    // Do not dispose the controller here — disposing it immediately after
+    // `showDialog` can cause the TextField to be used after disposal during
+    // framework animation/update callbacks. Letting it be GC'd avoids
+    // intermittent "used after being disposed" errors.
 
     if (name == null || name.trim().isEmpty) {
       return;
@@ -106,39 +128,18 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _removeEntry(LibraryEntryModel entry) async {
-    final rows = await widget.apiService.fetchLibraryEntries();
-    int? entryId;
-    for (final row in rows) {
-      final book = row['book'] as Map<String, dynamic>;
-      if (book['id'] == entry.book.id) {
-        entryId = row['id'] as int;
-        break;
-      }
-    }
-    if (entryId == null) return;
-    await widget.apiService.deleteLibraryEntry(entryId);
+    await widget.apiService.deleteLibraryEntry(entry.id);
     if (mounted) {
       _loadEntries();
     }
   }
 
   Future<void> _changeStatus(LibraryEntryModel entry) async {
-    final rows = await widget.apiService.fetchLibraryEntries();
-    int? entryId;
-    for (final row in rows) {
-      final book = row['book'] as Map<String, dynamic>;
-      if (book['id'] == entry.book.id) {
-        entryId = row['id'] as int;
-        break;
-      }
-    }
-    if (entryId == null) return;
-
     final nextStatus = entry.readingStatus.toLowerCase() == 'completed'
         ? 'Reading'
         : 'Completed';
 
-    await widget.apiService.updateLibraryEntry(entryId, {
+    await widget.apiService.updateLibraryEntry(entry.id, {
       'reading_status': nextStatus,
       'updated_text': entry.updatedText,
       'chapters': entry.chapters,
@@ -190,7 +191,7 @@ class _LibraryScreenState extends State<LibraryScreen>
             children: [
               // Current Reads
               _CurrentReadsTab(
-                entries: _entries,
+                entries: _currentEntries,
                 apiService: widget.apiService,
                 loading: _loading,
                 onDelete: _removeEntry,
@@ -206,7 +207,10 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
 
               // History
-              _HistoryTab(entries: _entries, apiService: widget.apiService),
+              _HistoryTab(
+                entries: _historyEntries,
+                apiService: widget.apiService,
+              ),
             ],
           ),
         ),
@@ -410,9 +414,7 @@ class _HistoryTab extends StatelessWidget {
         else
           ...entries
               .where(
-                (entry) =>
-                    entry.readingStatus.toLowerCase().contains('completed') ||
-                    entry.readingStatus.toLowerCase().contains('ago'),
+                (entry) => entry.readingStatus.toLowerCase() == 'completed',
               )
               .map(
                 (entry) => Padding(
@@ -451,11 +453,11 @@ class _HistoryEntryCard extends StatelessWidget {
               height: 58,
               child: entry.book.coverPath.isNotEmpty
                   ? Image.network(
-                    apiService.resolveAssetUrl(entry.book.coverPath),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) =>
-                      const ColoredBox(color: Color(0xFFE4E4E4)),
-                  )
+                      apiService.resolveAssetUrl(entry.book.coverPath),
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) =>
+                          const ColoredBox(color: Color(0xFFE4E4E4)),
+                    )
                   : const ColoredBox(color: Color(0xFFE4E4E4)),
             ),
           ),
@@ -463,6 +465,7 @@ class _HistoryEntryCard extends StatelessWidget {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   entry.book.title,
@@ -475,11 +478,15 @@ class _HistoryEntryCard extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   'by ${entry.book.author}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 4),
                 Text(
                   '${entry.updatedText}  •  ${entry.primaryGenre}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(
                     context,
                   ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
@@ -524,7 +531,7 @@ class _LibraryEntryTile extends StatelessWidget {
               height: 100,
               child: entry.book.coverPath.isNotEmpty
                   ? Image.network(
-                    apiService.resolveAssetUrl(entry.book.coverPath),
+                      apiService.resolveAssetUrl(entry.book.coverPath),
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) =>
                           _BookCoverFallback(color: color),
@@ -538,10 +545,11 @@ class _LibraryEntryTile extends StatelessWidget {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   entry.book.title,
-                  maxLines: 2,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontSize: 16,
@@ -595,6 +603,8 @@ class _LibraryEntryTile extends StatelessWidget {
                           const SizedBox(width: 4),
                           Text(
                             entry.readingStatus,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: Theme.of(
                               context,
                             ).textTheme.bodySmall?.copyWith(fontSize: 12),
@@ -615,6 +625,8 @@ class _LibraryEntryTile extends StatelessWidget {
                     if (entry.primaryGenre.isNotEmpty)
                       Text(
                         entry.primaryGenre,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: const Color(0xFF555555),
                           fontSize: 12,
@@ -625,6 +637,8 @@ class _LibraryEntryTile extends StatelessWidget {
                     if (entry.secondaryGenre.isNotEmpty)
                       Text(
                         entry.secondaryGenre,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: const Color(0xFF555555),
                           fontSize: 12,
@@ -686,7 +700,7 @@ class _ReadingListRowCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               child: list.coverPath.isNotEmpty
                   ? Image.network(
-                    apiService.resolveAssetUrl(list.coverPath),
+                      apiService.resolveAssetUrl(list.coverPath),
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) =>
                           const ColoredBox(color: Color(0xFFDDDDDD)),

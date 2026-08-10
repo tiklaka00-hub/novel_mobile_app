@@ -20,7 +20,7 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  final ApiService _apiService = const ApiService();
+  final ApiService _apiService = ApiService();
   late final AuthService _authService = AuthService(apiService: _apiService);
   int _selectedIndex = 1;
   AppBootstrap? _bootstrap;
@@ -33,7 +33,10 @@ class _RootShellState extends State<RootShell> {
   void initState() {
     super.initState();
     _restoreSession();
-    _syncTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollContentVersion());
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _pollContentVersion(),
+    );
   }
 
   @override
@@ -87,7 +90,9 @@ class _RootShellState extends State<RootShell> {
   Future<void> _continueLogin(String method, {String? email}) async {
     final session = method == 'google'
         ? await _authService.signInWithGoogle()
-        : await _authService.signInWithEmail(email ?? '');
+        : method == 'email'
+        ? await _authService.signInWithEmail(email ?? '')
+        : await _authService.signInAsGuest();
     if (!mounted) {
       return;
     }
@@ -103,6 +108,8 @@ class _RootShellState extends State<RootShell> {
         content: Text(
           session.isGoogle
               ? 'Signed in as ${session.displayName}'
+              : session.isGuest
+              ? 'Continuing as guest'
               : 'Signed in with ${session.email}',
         ),
       ),
@@ -130,9 +137,7 @@ class _RootShellState extends State<RootShell> {
     }
 
     if (_loading || _bootstrap == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final pages = <Widget>[

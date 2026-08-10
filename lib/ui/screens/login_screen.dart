@@ -3,10 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 
 class LoginScreen extends StatelessWidget {
-  const LoginScreen({
-    super.key,
-    required this.onContinue,
-  });
+  const LoginScreen({super.key, required this.onContinue});
 
   final Future<void> Function(String method, {String? email}) onContinue;
 
@@ -50,7 +47,8 @@ class LoginScreen extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
-                  onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+                  onPressed: () =>
+                      Navigator.of(context).pop(controller.text.trim()),
                   child: const Text('Continue'),
                 ),
               ),
@@ -95,9 +93,9 @@ class LoginScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 Text(
                   'Discover Millions of Free Books',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: AppTheme.muted,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(color: AppTheme.muted),
                 ),
                 const Spacer(),
                 _LoginButton(
@@ -110,6 +108,12 @@ class LoginScreen extends StatelessWidget {
                   icon: Icons.email_outlined,
                   label: 'Continue with Email',
                   onPressed: () => _openEmailPrompt(context),
+                ),
+                const SizedBox(height: 12),
+                _LoginButton(
+                  icon: Icons.person_outline,
+                  label: 'Continue without sign in',
+                  onPressed: () => onContinue('guest'),
                 ),
                 const SizedBox(height: 28),
                 Text(
@@ -155,9 +159,9 @@ class _LoginButton extends StatelessWidget {
         icon: Icon(icon, size: 24),
         label: Text(
           label,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: const Color(0xFF525252),
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(color: const Color(0xFF525252)),
         ),
       ),
     );

@@ -176,6 +176,7 @@ class ExploreTopicModel {
 
 class LibraryEntryModel {
   const LibraryEntryModel({
+    required this.id,
     required this.book,
     required this.readingStatus,
     required this.updatedText,
@@ -184,6 +185,7 @@ class LibraryEntryModel {
     required this.secondaryGenre,
   });
 
+  final int id;
   final BookCardModel book;
   final String readingStatus;
   final String updatedText;
@@ -193,6 +195,7 @@ class LibraryEntryModel {
 
   factory LibraryEntryModel.fromMap(Map<String, dynamic> map) {
     return LibraryEntryModel(
+      id: map['id'] as int,
       book: BookCardModel.fromMap(map['book'] as Map<String, dynamic>),
       readingStatus: map['reading_status'] as String,
       updatedText: map['updated_text'] as String,

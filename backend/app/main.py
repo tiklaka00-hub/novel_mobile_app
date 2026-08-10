@@ -33,6 +33,9 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin_Supun")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Ux3@f=7x2")
 ADMIN_TOKEN_EXPIRES_HOURS = int(os.getenv("ADMIN_TOKEN_EXPIRES_HOURS", "24"))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+# Support multiple acceptable client IDs via comma-separated env var for flexibility
+# e.g. GOOGLE_CLIENT_IDS=android-client-id,web-client-id
+GOOGLE_CLIENT_IDS = [s.strip() for s in os.getenv("GOOGLE_CLIENT_IDS", GOOGLE_CLIENT_ID).split(",") if s.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -255,6 +258,20 @@ class GoogleAuthRequest(BaseModel):
     access_token: str | None = None
 
 
+class EmailAuthRequest(BaseModel):
+    email: str
+    display_name: str = ""
+
+
+class GuestAuthRequest(BaseModel):
+    pass
+
+
+class ChatMessageCreateRequest(BaseModel):
+    message: str
+    sender: str = "user"
+
+
 class VersionResponse(BaseModel):
     value: str
     updated_at: str | None = None
@@ -383,6 +400,79 @@ def require_admin(authorization: str | None = Header(default=None)) -> dict[str,
     return payload
 
 
+def _sign_token(payload: dict[str, Any]) -> str:
+    encoded_payload = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    signature = hmac.new(
+        JWT_SECRET.encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded_payload}.{signature}"
+
+
+def create_user_token(user_id: int) -> str:
+    expires_at = datetime.now(timezone.utc) + timedelta(days=180)
+    return _sign_token(
+        {
+            "sub": f"user:{user_id}",
+            "role": "user",
+            "exp": expires_at.isoformat(),
+        }
+    )
+
+
+def require_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing user token")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing user token")
+
+    try:
+        encoded_payload, provided_signature = token.split(".", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid user token") from exc
+
+    expected_signature = hmac.new(
+        JWT_SECRET.encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, provided_signature):
+        raise HTTPException(status_code=401, detail="Invalid user token")
+
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded_payload.encode("ascii")).decode("utf-8")
+        )
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid user token") from exc
+
+    if payload.get("role") != "user":
+        raise HTTPException(status_code=403, detail="User role required")
+
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not sub.startswith("user:"):
+        raise HTTPException(status_code=401, detail="Invalid user token")
+
+    expires_raw = payload.get("exp")
+    if not isinstance(expires_raw, str):
+        raise HTTPException(status_code=401, detail="Invalid user token")
+
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid user token") from exc
+
+    if expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="User token expired")
+
+    return {"user_id": int(sub.split(":", 1)[1])}
+
+
 def _public_image_path(filename: str) -> str:
     return f"/uploads/{filename}"
 
@@ -392,7 +482,9 @@ def _normalize_cover_path(path: str | None) -> str:
         return ""
     if path.startswith(("http://", "https://", "/uploads/")):
         return path
-    if path.startswith("story_card_images/"):
+    # Handle both "story_card_images/..." and "assets/story_card_images/..."
+    # (legacy paths from older DB seeds)
+    if "story_card_images/" in path:
         return _public_image_path(path.split("/")[-1])
     if "/" not in path:
         return _public_image_path(path)
@@ -428,8 +520,10 @@ def _verify_google_payload(payload: GoogleAuthRequest) -> dict[str, Any]:
             "https://oauth2.googleapis.com/tokeninfo",
             {"id_token": payload.id_token},
         )
+        LOGGER.debug("Google tokeninfo (id_token): %s", token_info)
         audience = token_info.get("aud", "")
-        if GOOGLE_CLIENT_ID and audience != GOOGLE_CLIENT_ID:
+        if GOOGLE_CLIENT_IDS and audience not in GOOGLE_CLIENT_IDS:
+            LOGGER.warning("Google audience mismatch: aud=%s allowed=%s tokeninfo=%s", audience, GOOGLE_CLIENT_IDS, token_info)
             raise HTTPException(status_code=401, detail="Google audience mismatch")
 
         email = token_info.get("email", "")
@@ -449,14 +543,17 @@ def _verify_google_payload(payload: GoogleAuthRequest) -> dict[str, Any]:
             "https://oauth2.googleapis.com/tokeninfo",
             {"access_token": payload.access_token},
         )
+        LOGGER.debug("Google tokeninfo (access_token): %s", token_info)
         audience = token_info.get("aud", "")
-        if GOOGLE_CLIENT_ID and audience != GOOGLE_CLIENT_ID:
+        if GOOGLE_CLIENT_IDS and audience not in GOOGLE_CLIENT_IDS:
+            LOGGER.warning("Google audience mismatch: aud=%s allowed=%s tokeninfo=%s", audience, GOOGLE_CLIENT_IDS, token_info)
             raise HTTPException(status_code=401, detail="Google audience mismatch")
 
         user_info = _fetch_google_json(
             "https://www.googleapis.com/oauth2/v2/userinfo",
             {"access_token": payload.access_token},
         )
+        LOGGER.debug("Google userinfo: %s", user_info)
         email = user_info.get("email", "")
         subject = user_info.get("id", "")
         if not email or not subject:
@@ -581,6 +678,78 @@ def authenticate_google(payload: GoogleAuthRequest):
         "display_name": google_user["display_name"],
         "photo_url": google_user["photo_url"],
         "provider": "google",
+        "token": create_user_token(user_id),
+    }
+
+
+@app.post("/api/auth/email")
+def authenticate_email(payload: EmailAuthRequest):
+    email = payload.email.strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+
+    display_name = (payload.display_name or "").strip() or email.split("@")[0]
+    rows = fetch_all("SELECT id FROM app_users WHERE email=%s LIMIT 1", (email,))
+    if rows:
+        user_id = rows[0]["id"]
+        execute_write(
+            """
+            UPDATE app_users
+            SET provider='email', display_name=%s, last_login_at=CURRENT_TIMESTAMP
+            WHERE id=%s
+            """,
+            (display_name, user_id),
+        )
+    else:
+        user_id, _ = execute_write(
+            """
+            INSERT INTO app_users (email, provider, display_name, photo_url)
+            VALUES (%s, 'email', %s, '')
+            """,
+            (email, display_name),
+        )
+
+    return {
+        "id": user_id,
+        "email": email,
+        "display_name": display_name,
+        "photo_url": "",
+        "provider": "email",
+        "token": create_user_token(user_id),
+    }
+
+
+@app.post("/api/auth/guest")
+def authenticate_guest(_: GuestAuthRequest):
+    email = "guest@novel.app"
+    display_name = "Guest"
+    rows = fetch_all("SELECT id FROM app_users WHERE email=%s LIMIT 1", (email,))
+    if rows:
+        user_id = rows[0]["id"]
+        execute_write(
+            """
+            UPDATE app_users
+            SET provider='guest', display_name=%s, last_login_at=CURRENT_TIMESTAMP
+            WHERE id=%s
+            """,
+            (display_name, user_id),
+        )
+    else:
+        user_id, _ = execute_write(
+            """
+            INSERT INTO app_users (email, provider, display_name, photo_url)
+            VALUES (%s, 'guest', %s, '')
+            """,
+            (email, display_name),
+        )
+
+    return {
+        "id": user_id,
+        "email": email,
+        "display_name": display_name,
+        "photo_url": "",
+        "provider": "guest",
+        "token": create_user_token(user_id),
     }
 
 
@@ -687,19 +856,21 @@ def bootstrap():
 
     featured_candidates = [b for b in books if b["section_name"] == "featured"]
     if not featured_candidates:
-        raise HTTPException(status_code=500, detail="No featured book configured")
+        featured_candidates = books[:1]
 
-    featured_raw = featured_candidates[0]
-    featured_book = {
-        "id": featured_raw["id"],
-        "title": featured_raw["title"],
-        "author": featured_raw["author"],
-        "description": featured_raw["description"],
-        "status_text": featured_raw["status_text"],
-        "rating": featured_raw["rating"],
-        "genre": featured_raw["genre"],
-        "cta": featured_raw["cta_label"],
-    }
+    featured_book = None
+    if featured_candidates:
+        featured_raw = featured_candidates[0]
+        featured_book = {
+            "id": featured_raw["id"],
+            "title": featured_raw["title"],
+            "author": featured_raw["author"],
+            "description": featured_raw["description"],
+            "status_text": featured_raw["status_text"],
+            "rating": featured_raw["rating"],
+            "genre": featured_raw["genre"],
+            "cta": featured_raw["cta_label"],
+        }
 
     library_entries = fetch_all(
         """
@@ -781,7 +952,10 @@ def bootstrap():
 
     profile_payload = {
         **profile,
-        "reading_lists": reading_lists,
+        "reading_lists": [
+            {**row, "cover_path": _normalize_cover_path(row["cover_path"])}
+            for row in reading_lists
+        ],
     }
 
     achievement_rows = fetch_all(
@@ -848,7 +1022,12 @@ def search_stories(
         """,
         (q, q, g, min_rating, limit),
     )
-    return {"items": rows}
+    return {
+        "items": [
+            {**row, "cover_path": _normalize_cover_path(row["cover_path"])}
+            for row in rows
+        ]
+    }
 
 
 @app.get("/api/notifications")
@@ -891,16 +1070,58 @@ def create_support_request(payload: SupportRequestCreateRequest):
     return {"ok": True, "id": request_id}
 
 
+@app.get("/api/chat/messages")
+def get_chat_messages(user: dict[str, Any] = Depends(require_user)):
+    rows = fetch_all(
+        """
+        SELECT id, user_id, sender, message, created_at
+        FROM chat_messages
+        WHERE user_id=%s
+        ORDER BY created_at ASC, id ASC
+        """,
+        (user["user_id"],),
+    )
+    return {
+        "items": [
+            {
+                "id": row["id"],
+                "sender": row["sender"],
+                "message": row["message"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/chat/messages")
+def create_chat_message(
+    payload: ChatMessageCreateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    sender = (payload.sender or "user").strip() or "user"
+    row_id, _ = execute_write(
+        "INSERT INTO chat_messages (user_id, sender, message) VALUES (%s, %s, %s)",
+        (user["user_id"], sender, message),
+    )
+    return {"ok": True, "id": row_id}
+
+
 @app.get("/api/library")
-def get_library_entries():
+def get_library_entries(user: dict[str, Any] = Depends(require_user)):
     rows = fetch_all(
         """
         SELECT le.id, le.reading_status, le.updated_text, le.chapters, le.primary_genre,
                le.secondary_genre, b.id AS book_id, b.title, b.author, b.cover_path, b.accent_hex
         FROM library_entries le
         JOIN books b ON b.id = le.book_id
+        WHERE le.user_id = %s
         ORDER BY le.sort_order, le.id
-        """
+        """,
+        (user["user_id"],),
     )
     return {
         "items": [
@@ -925,13 +1146,17 @@ def get_library_entries():
 
 
 @app.post("/api/library")
-def create_library_entry(payload: LibraryCreateRequest):
+def create_library_entry(
+    payload: LibraryCreateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
     _, affected = execute_write(
         """
-        INSERT INTO library_entries (book_id, reading_status, updated_text, chapters, primary_genre, secondary_genre, sort_order)
-        VALUES (%s, %s, %s, %s, %s, %s, 999)
+        INSERT INTO library_entries (user_id, book_id, reading_status, updated_text, chapters, primary_genre, secondary_genre, sort_order)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 999)
         """,
         (
+            user["user_id"],
             payload.book_id,
             payload.reading_status,
             payload.updated_text,
@@ -947,8 +1172,15 @@ def create_library_entry(payload: LibraryCreateRequest):
 
 
 @app.put("/api/library/{entry_id}")
-def update_library_entry(entry_id: int, payload: LibraryUpdateRequest):
-    current_rows = fetch_all("SELECT * FROM library_entries WHERE id=%s", (entry_id,))
+def update_library_entry(
+    entry_id: int,
+    payload: LibraryUpdateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    current_rows = fetch_all(
+        "SELECT * FROM library_entries WHERE id=%s AND user_id=%s",
+        (entry_id, user["user_id"]),
+    )
     if not current_rows:
         raise HTTPException(status_code=404, detail="Library entry not found")
 
@@ -961,7 +1193,7 @@ def update_library_entry(entry_id: int, payload: LibraryUpdateRequest):
             chapters=%s,
             primary_genre=%s,
             secondary_genre=%s
-        WHERE id=%s
+        WHERE id=%s AND user_id=%s
         """,
         (
             payload.reading_status or current["reading_status"],
@@ -970,6 +1202,7 @@ def update_library_entry(entry_id: int, payload: LibraryUpdateRequest):
             payload.primary_genre or current["primary_genre"],
             payload.secondary_genre or current["secondary_genre"],
             entry_id,
+            user["user_id"],
         ),
     )
     if affected == 0:
@@ -979,8 +1212,11 @@ def update_library_entry(entry_id: int, payload: LibraryUpdateRequest):
 
 
 @app.delete("/api/library/{entry_id}")
-def delete_library_entry(entry_id: int):
-    _, affected = execute_write("DELETE FROM library_entries WHERE id=%s", (entry_id,))
+def delete_library_entry(entry_id: int, user: dict[str, Any] = Depends(require_user)):
+    _, affected = execute_write(
+        "DELETE FROM library_entries WHERE id=%s AND user_id=%s",
+        (entry_id, user["user_id"]),
+    )
     if affected == 0:
         raise HTTPException(status_code=404, detail="Library entry not found")
     bump_content_version()

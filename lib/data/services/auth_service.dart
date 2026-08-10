@@ -19,18 +19,32 @@ class AuthSession {
   final String? photoUrl;
 
   bool get isGoogle => method == 'google';
+  bool get isGuest => method == 'guest';
 }
 
 class AuthService {
+  static const String _googleClientIdEnv = String.fromEnvironment(
+    'GOOGLE_CLIENT_ID',
+    defaultValue: '',
+  );
+
   AuthService({required ApiService apiService, GoogleSignIn? googleSignIn})
     : _apiService = apiService,
-      _googleSignIn = googleSignIn ?? GoogleSignIn(scopes: const ['email']);
+      _googleSignIn =
+          googleSignIn ??
+          (_googleClientIdEnv.isNotEmpty
+              ? GoogleSignIn(
+                  scopes: const ['email'],
+                  serverClientId: _googleClientIdEnv,
+                )
+              : GoogleSignIn(scopes: const ['email']));
 
   static const String _methodKey = 'auth_method';
   static const String _idKey = 'auth_id';
   static const String _emailKey = 'auth_email';
   static const String _displayNameKey = 'auth_display_name';
   static const String _photoUrlKey = 'auth_photo_url';
+  static const String _tokenKey = 'auth_token';
 
   final ApiService _apiService;
   final GoogleSignIn _googleSignIn;
@@ -42,8 +56,14 @@ class AuthService {
       return null;
     }
 
+    final token = prefs.getString(_tokenKey);
+    if (token != null && token.isNotEmpty) {
+      _apiService.setAuthToken(token);
+    }
+
     if (method == 'google') {
-      final user = _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
+      final user =
+          _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
       if (user != null) {
         final session = AuthSession(
           id: prefs.getInt(_idKey),
@@ -83,6 +103,7 @@ class AuthService {
       idToken: auth.idToken,
       accessToken: auth.accessToken,
     );
+    _apiService.setAuthToken(payload['token']?.toString());
     final session = AuthSession(
       id: payload['id'] as int?,
       method: 'google',
@@ -97,11 +118,28 @@ class AuthService {
 
   Future<AuthSession> signInWithEmail(String email) async {
     final normalized = email.trim();
+    final payload = await _apiService.verifyEmailSignIn(normalized);
+    _apiService.setAuthToken(payload['token']?.toString());
     final session = AuthSession(
-      id: null,
+      id: payload['id'] as int?,
       method: 'email',
-      email: normalized,
-      displayName: normalized.split('@').first,
+      email: payload['email']?.toString() ?? normalized,
+      displayName:
+          payload['display_name']?.toString() ?? normalized.split('@').first,
+    );
+    await _persistSession(session);
+    return session;
+  }
+
+  Future<AuthSession> signInAsGuest() async {
+    final payload = await _apiService.verifyGuestSignIn();
+    _apiService.setAuthToken(payload['token']?.toString());
+    final session = AuthSession(
+      id: payload['id'] as int?,
+      method: 'guest',
+      email: payload['email']?.toString() ?? 'guest@novel.app',
+      displayName: payload['display_name']?.toString() ?? 'Guest',
+      photoUrl: payload['photo_url']?.toString(),
     );
     await _persistSession(session);
     return session;
@@ -111,17 +149,25 @@ class AuthService {
     try {
       await _googleSignIn.signOut();
     } catch (_) {}
+    _apiService.setAuthToken(null);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_methodKey);
     await prefs.remove(_idKey);
     await prefs.remove(_emailKey);
     await prefs.remove(_displayNameKey);
     await prefs.remove(_photoUrlKey);
+    await prefs.remove(_tokenKey);
   }
 
   Future<void> _persistSession(AuthSession session) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_methodKey, session.method);
+    final token = _apiService.authTokenForPersistence;
+    if (token != null && token.isNotEmpty) {
+      await prefs.setString(_tokenKey, token);
+    } else {
+      await prefs.remove(_tokenKey);
+    }
     if (session.id != null) {
       await prefs.setInt(_idKey, session.id!);
     } else {

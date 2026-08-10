@@ -5,7 +5,10 @@ from uuid import uuid4
 import mysql.connector
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env.local first (local dev environment), then fall back to .env
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_BACKEND_ROOT / ".env.local", override=False)
+load_dotenv(_BACKEND_ROOT / ".env", override=False)
 
 REQUIRED_TABLES = {
     "categories",
@@ -18,8 +21,6 @@ REQUIRED_TABLES = {
     "profiles",
     "reading_lists",
     "achievements",
-    "app_metadata",
-    "support_requests",
 }
 
 SEED_CATEGORIES = [
@@ -46,7 +47,7 @@ SEED_BOOKS = [
         "River (Revised version)",
         "Lola Grant",
         "A revised edition prepared for publication with deeper character arcs.",
-        "story_card_images/story11.jpg",
+        "story_card_images/c1a4b2d2-7ba9-44ea-9ea9-81873119a8ec.jpg",
         "#8DB7C8",
         "recently_updated",
         "2hr ago",
@@ -61,7 +62,7 @@ SEED_BOOKS = [
         "Misery's Chosen",
         "I. Falon",
         "Mico faces a shadowed figure with glowing eyes on a stormy night.",
-        "story_card_images/story8.jpg",
+        "story_card_images/cf12c459-4fe5-4725-8ca0-01f42b898d21.jpg",
         "#4A4A62",
         "recently_completed",
         "Completed",
@@ -76,7 +77,7 @@ SEED_BOOKS = [
         "Goddess Tamer",
         "Ari Nova",
         "A reborn hero must tame a dangerous goddess and survive a hostile realm.",
-        "story_card_images/story15.jpg",
+        "story_card_images/d1a0655f-892d-4603-919f-92cdf779dae7.jpg",
         "#7F74C1",
         "recently_completed",
         "Completed",
@@ -91,7 +92,7 @@ SEED_BOOKS = [
         "Avengard: The Fall of Senvia",
         "R. Den",
         "Two survivors chase a stolen voice across a drowned empire.",
-        "story_card_images/story13.jpg",
+        "story_card_images/d7728b65-7fcc-45cc-bfb2-38a47dfea216.jpg",
         "#6A8DB5",
         "recently_updated",
         "1yr ago",
@@ -106,7 +107,7 @@ SEED_BOOKS = [
         "Diary Of Nobody",
         "K. Haze",
         "A quiet diary that reveals pages no one was meant to read.",
-        "story_card_images/story10.jpg",
+        "story_card_images/d55997d3-bc48-43a1-a42e-d004598104d0.jpg",
         "#7D6A5A",
         "recently_updated",
         "1m ago",
@@ -121,7 +122,7 @@ SEED_BOOKS = [
         "Demon King Leveling System",
         "J. Ard",
         "A trapped student awakens a leveling system to survive the abyss.",
-        "story_card_images/story3.jpg",
+        "story_card_images/dc335f4a-9cf3-498d-8c27-5addd0cb15cf.jpg",
         "#3F6FA0",
         "recently_updated",
         "5m ago",
@@ -136,7 +137,7 @@ SEED_BOOKS = [
         "The Boy with the Checkered Scarf",
         "M. Wren",
         "A mythic tale where one scarf links three broken timelines.",
-        "story_card_images/story12.jpg",
+        "story_card_images/dc499710-91bd-4dae-8d0c-145faa5345e2.jpg",
         "#7C6D6A",
         "recently_updated",
         "10m ago",
@@ -151,7 +152,7 @@ SEED_BOOKS = [
         "The Mnemonivores",
         "Liora Fane",
         "Creatures that feed on memories stalk a city after sunset.",
-        "story_card_images/story14.jpg",
+        "story_card_images/de52e8d5-1a1c-43b2-8752-70582d3e6c94.jpg",
         "#51406A",
         "recently_updated",
         "7m ago",
@@ -166,7 +167,7 @@ SEED_BOOKS = [
         "Gaming Cube Adventures",
         "E. Barrett",
         "A failed streamer logs into a game that refuses to let him leave.",
-        "story_card_images/story5.jpg",
+        "story_card_images/e65f5659-9564-4623-b4c6-a5c37cb4aa5e.jpg",
         "#5875A3",
         "recently_updated",
         "2wk ago",
@@ -181,7 +182,7 @@ SEED_BOOKS = [
         "The Apex Transfer",
         "Elena Torres",
         "An invisible outlier discovers she carries royal wolf blood.",
-        "story_card_images/story4.jpg",
+        "story_card_images/fdc309b2-20b4-4966-8293-9db4532dd8e3.jpg",
         "#7B5D56",
         "recently_completed",
         "Completed",
@@ -220,6 +221,32 @@ def _split_sql_statements(sql_content: str) -> list[str]:
     return statements
 
 
+def _ensure_database_exists() -> None:
+    """Create the target database if it does not exist yet."""
+    ssl_disabled = os.getenv("MYSQL_SSL_DISABLED", "false").lower() == "true"
+    db_name = os.getenv("MYSQL_DATABASE", "novel_app_db")
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+            port=int(os.getenv("MYSQL_PORT", "3306")),
+            user=os.getenv("MYSQL_USER", "root"),
+            password=os.getenv("MYSQL_PASSWORD", ""),
+            ssl_disabled=ssl_disabled,
+            use_pure=True,
+        )
+        cursor = connection.cursor()
+        cursor.execute(
+            f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
+            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+        )
+        connection.commit()
+        cursor.close()
+        connection.close()
+    except mysql.connector.Error as exc:
+        # If we cannot even connect without a database, re-raise.
+        raise exc
+
+
 def initialize_database_if_needed() -> bool:
     """Initialize schema/seed data on startup when required tables are missing."""
     init_sql = os.getenv("MYSQL_INIT_SQL", "setup_railway.sql")
@@ -227,6 +254,8 @@ def initialize_database_if_needed() -> bool:
 
     if not sql_path.exists():
         raise FileNotFoundError(f"Init SQL file not found: {sql_path}")
+
+    _ensure_database_exists()
 
     connection = get_connection()
     cursor = connection.cursor()
@@ -384,12 +413,59 @@ def run_startup_migrations() -> dict[str, int]:
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 email VARCHAR(255) NOT NULL UNIQUE,
                 provider VARCHAR(40) NOT NULL DEFAULT 'google',
-                provider_subject VARCHAR(255) NOT NULL,
+                provider_subject VARCHAR(255) NULL,
                 display_name VARCHAR(255) NOT NULL,
                 photo_url TEXT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 last_login_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    # Allow guest/email users without a provider subject (nullable).
+    cursor.execute("SHOW COLUMNS FROM app_users LIKE 'provider_subject'")
+    if cursor.fetchone() is not None:
+        cursor.execute(
+            "ALTER TABLE app_users MODIFY provider_subject VARCHAR(255) NULL"
+        )
+        result["columns_added"] += 1
+
+    # Add user_id to library_entries so each user has their own library.
+    cursor.execute("SHOW COLUMNS FROM library_entries LIKE 'user_id'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "ALTER TABLE library_entries ADD COLUMN user_id INT NULL AFTER id"
+        )
+        result["columns_added"] += 1
+
+    # Add user_id to books so writer stories are scoped to the author.
+    cursor.execute("SHOW COLUMNS FROM books LIKE 'user_id'")
+    if cursor.fetchone() is None:
+        cursor.execute("ALTER TABLE books ADD COLUMN user_id INT NULL AFTER id")
+        result["columns_added"] += 1
+
+    # Add user_id to reading_lists so lists are per-user.
+    cursor.execute("SHOW COLUMNS FROM reading_lists LIKE 'user_id'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "ALTER TABLE reading_lists ADD COLUMN user_id INT NULL AFTER id"
+        )
+        result["columns_added"] += 1
+
+    # Chat history table for the in-app support/contact chat.
+    cursor.execute("SHOW TABLES LIKE 'chat_messages'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE chat_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                sender VARCHAR(40) NOT NULL DEFAULT 'user',
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_chat_user FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
             )
             """
         )
@@ -518,4 +594,8 @@ def get_connection():
         password=os.getenv("MYSQL_PASSWORD", ""),
         database=os.getenv("MYSQL_DATABASE", "novel_app_db"),
         ssl_disabled=ssl_disabled,
+        # Use the pure-Python implementation. The bundled C extension
+        # (_mysql_connector.cp313-win_amd64.pyd) crashes with an access
+        # violation (0xC0000005) on this machine.
+        use_pure=True,
     )

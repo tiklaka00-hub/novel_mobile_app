@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -37,7 +35,11 @@ class _SupportScreenState extends State<SupportScreen> {
       return;
     }
 
-    final payload = await widget.apiService.uploadSupportAttachment(File(picked.path));
+    final bytes = await picked.readAsBytes();
+    final payload = await widget.apiService.uploadSupportAttachment(
+      bytes,
+      picked.name,
+    );
     final path = payload['path']?.toString() ?? '';
     if (!mounted || path.isEmpty) {
       return;

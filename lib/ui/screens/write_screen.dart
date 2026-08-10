@@ -31,7 +31,12 @@ class _WriteScreenState extends State<WriteScreen>
   void initState() {
     super.initState();
     _mainTabs = TabController(length: 2, vsync: this);
-    _storySubTabs = TabController(length: 2, vsync: this);
+    _storySubTabs = TabController(
+      length: widget.data.writeScreen.storyTabs.isNotEmpty
+          ? widget.data.writeScreen.storyTabs.length
+          : 2,
+      vsync: this,
+    );
     _analyticsSubTabs = TabController(length: 2, vsync: this);
     _storiesFuture = widget.apiService.fetchWriterStories();
     _mainTabs.addListener(() => setState(() {}));

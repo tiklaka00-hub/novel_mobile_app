@@ -148,12 +148,12 @@ INSERT INTO books (title, author, description, cover_path, accent_hex, section_n
 ('Perpromenos', 'Koyar Kora', 'Mythic green cover drama.', 'story_card_images/7d7d5cc8-5b0a-4821-9e57-3f58c36998b0.jpg', '#8E9877', 'recently_completed', 'Completed', 4.4, 'Literary Fiction', 'Read now', 7),
 ('Owned by the Lycan King (18+)', 'E.F BONI', 'Currently in user library.', 'story_card_images/8de846ae-c1cc-4e8b-a52e-e8aa48b6abb1.jpg', '#8B523C', 'recently_completed', 'Completed', 4.8, 'Romance', 'Read now', 8),
 ('Lune', 'Angela Lawece', 'Moonlit fantasy sci-fi.', 'story_card_images/9e84fd30-5477-45f2-8c48-5c290f275856.jpg', '#66738D', 'recently_completed', '2wk ago', 4.2, 'Fantasy', 'Read now', 9),
-('Echoes of Us: Second Chance Romance', 'M. Dorian', 'A heartfelt second-chance love story between two former rivals.', 'story_card_images/story2.jpg', '#E86C9F', 'recently_updated', '45m ago', 4.6, 'Romance', 'Read now', 10),
-('Scent of Another Alpha', 'A. Virel', 'After rejection and exile, she returns stronger than ever.', 'story_card_images/story3.jpg', '#8B4513', 'recently_updated', '10m ago', 4.9, 'Paranormal', 'Read now', 11),
-('Conquering My Stepmother', 'K. Aris', 'A reincarnated anti-hero rises through a brutal cultivation world.', 'story_card_images/story4.jpg', '#7B68EE', 'recently_updated', '1d ago', 4.5, 'Fantasy', 'Read now', 12),
-('Say You Are Mine', 'Nora Vale', 'A one-night encounter turns into a relentless emotional war.', 'story_card_images/story5.jpg', '#E86C9F', 'recently_completed', 'Completed', 4.9, 'Romance', 'Read now', 13),
-('The Cedar House', 'J. Porter', 'A return home reopens old wounds and unforgettable chemistry.', 'story_card_images/story12.jpg', '#E86C9F', 'recently_completed', 'Completed', 4.6, 'Drama', 'Read now', 14),
-('Haven House', 'M. Hartwell', 'A gothic mystery in an old manor where every door has a secret.', 'story_card_images/story14.jpg', '#2F4F4F', 'recently_updated', '3h ago', 4.7, 'Mystery', 'Read now', 15);
+('Echoes of Us: Second Love Story', 'M. Dorian', 'A heartfelt second-chance love story between two former rivals.', 'story_card_images/0aaa5ea7-670f-4995-8378-474c09b319b2.jpg', '#E86C9F', 'recently_updated', '45m ago', 4.6, 'Romance', 'Read now', 10),
+('Scent of Another Alpha', 'A. Virel', 'After rejection and exile, she returns stronger than ever.', 'story_card_images/4a4f19a1-b096-4613-b635-f71e311481d1.jpg', '#8B4513', 'recently_updated', '10m ago', 4.9, 'Paranormal', 'Read now', 11),
+('Conquering My Stepmother', 'K. Aris', 'A reincarnated anti-hero rises through a brutal cultivation world.', 'story_card_images/5ba33f5b-f733-4dd3-a3d8-ad66dacfb093.jpg', '#7B68EE', 'recently_updated', '1d ago', 4.5, 'Fantasy', 'Read now', 12),
+('Say You Are Mine', 'Nora Vale', 'A one-night encounter turns into a relentless emotional war.', 'story_card_images/a5f489f6-2a42-43c0-a190-2da06adfebf8.jpg', '#E86C9F', 'recently_completed', 'Completed', 4.9, 'Romance', 'Read now', 13),
+('The Cedar House', 'J. Porter', 'A return home reopens old wounds and unforgettable chemistry.', 'story_card_images/a16e9738-0207-421b-84ac-f9c7193f77df.jpg', '#E86C9F', 'recently_completed', 'Completed', 4.6, 'Drama', 'Read now', 14),
+('Haven House', 'M. Hartwell', 'A gothic mystery in an old manor where every door has a secret.', 'story_card_images/b38a56a4-02f3-4d51-aa3e-469b25e77806.jpg', '#2F4F4F', 'recently_updated', '3h ago', 4.7, 'Mystery', 'Read now', 15);
 
 INSERT INTO library_entries (book_id, reading_status, updated_text, chapters, primary_genre, secondary_genre, sort_order) VALUES
 (8, 'Completed', '31 Chapters', 31, 'Romance', 'Erotica', 1),

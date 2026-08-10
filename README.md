@@ -27,7 +27,7 @@ Because of that, you do not need to re-run SQL manually for normal local develop
 2. Create your backend env file.
 
 ```powershell
-cd c:\lakmal_code\novel_mobile_app\novel_mobile_app\backend
+cd c:\lakmal_code\novel_mobile_app\backend
 Copy-Item .env.example .env
 ```
 
@@ -47,12 +47,14 @@ Copy-Item .env.example .env
 4. Install and run the backend.
 
 ```powershell
-cd c:\lakmal_code\novel_mobile_app\novel_mobile_app\backend
+cd c:\lakmal_code\novel_mobile_app\backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+> Note: The backend can run on Python 3.11, 3.12, or 3.13 with `pydantic==2.13.4`.
 
 Default admin login:
 

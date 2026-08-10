@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -45,7 +43,11 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       return;
     }
 
-    final payload = await widget.apiService.uploadWriterImage(File(picked.path));
+    final bytes = await picked.readAsBytes();
+    final payload = await widget.apiService.uploadWriterImage(
+      bytes,
+      picked.name,
+    );
     final path = payload['path']?.toString() ?? '';
     if (!mounted || path.isEmpty) {
       return;

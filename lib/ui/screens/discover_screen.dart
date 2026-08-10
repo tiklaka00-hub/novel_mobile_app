@@ -29,16 +29,17 @@ class DiscoverScreen extends StatefulWidget {
 
 class _DiscoverScreenState extends State<DiscoverScreen>
     with SingleTickerProviderStateMixin {
+  late final List<String> _tabs;
   late TabController _tabController;
   int _selectedTabIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(
-      length: widget.data.discoverTabs.length,
-      vsync: this,
-    );
+    _tabs = widget.data.discoverTabs.isNotEmpty
+        ? widget.data.discoverTabs
+        : const ['New', 'Popular', 'Fanfiction', 'Newsfeed'];
+    _tabController = TabController(length: _tabs.length, vsync: this);
     _tabController.addListener(() {
       setState(() => _selectedTabIndex = _tabController.index);
     });
@@ -104,9 +105,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     if (value == 'support') {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (_) => SupportScreen(
-                            apiService: widget.apiService,
-                          ),
+                          builder: (_) =>
+                              SupportScreen(apiService: widget.apiService),
                         ),
                       );
                       return;
@@ -160,7 +160,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               color: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: _CategoryTabs(
-                labels: widget.data.discoverTabs,
+                labels: _tabs,
                 tabController: _tabController,
               ),
             ),
@@ -174,7 +174,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 
   Widget _buildTabContent(int tabIndex) {
-    final tabLabel = widget.data.discoverTabs[tabIndex].toLowerCase();
+    final tabLabel = _tabs[tabIndex].toLowerCase();
     final allBooks = _booksForDiscover();
     final sections = _discoverSectionsForTab(tabLabel, allBooks);
     final showExploreLead = tabLabel == 'new' && sections.isNotEmpty;
@@ -190,6 +190,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
             _ExploreStoriesSection(
               books: sections.first.books,
               topics: widget.data.exploreTopics,
+              apiService: widget.apiService,
               onOpenExplore: () {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -212,6 +213,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                 _GenrePillRow(
                   topics: widget.data.exploreTopics,
                   books: allBooks,
+                  apiService: widget.apiService,
                   onOpenExplore: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -372,11 +374,13 @@ class _ExploreStoriesSection extends StatelessWidget {
   const _ExploreStoriesSection({
     required this.books,
     required this.topics,
+    required this.apiService,
     required this.onOpenExplore,
   });
 
   final List<BookCardModel> books;
   final List<ExploreTopicModel> topics;
+  final ApiService apiService;
   final VoidCallback onOpenExplore;
 
   @override
@@ -400,7 +404,11 @@ class _ExploreStoriesSection extends StatelessWidget {
             itemCount: covers.length,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
-              return _StoryCard(book: covers[index], width: 86);
+              return _StoryCard(
+                book: covers[index],
+                width: 86,
+                apiService: apiService,
+              );
             },
           ),
         ),
@@ -410,6 +418,7 @@ class _ExploreStoriesSection extends StatelessWidget {
         _GenrePillRow(
           topics: topics,
           books: books,
+          apiService: apiService,
           onOpenExplore: onOpenExplore,
         ),
       ],
@@ -479,7 +488,11 @@ class _DynamicStoryRailState extends State<_DynamicStoryRail> {
               final item = widget.section.books[index];
               return Padding(
                 padding: const EdgeInsets.only(right: 10),
-                child: _StoryCard(book: item, width: 96),
+                child: _StoryCard(
+                  book: item,
+                  width: 96,
+                  apiService: widget.apiService,
+                ),
               );
             },
           ),
@@ -545,59 +558,69 @@ class _ActiveStoryDetail extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        Row(
+        Wrap(
+          spacing: 10,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Icon(Icons.schedule_rounded, size: 14, color: AppTheme.muted),
-            const SizedBox(width: 4),
-            Text(
-              book.statusText.isEmpty ? 'Updated recently' : book.statusText,
-              style: Theme.of(context).textTheme.bodySmall,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.schedule_rounded,
+                  size: 14,
+                  color: AppTheme.muted,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  book.statusText.isEmpty
+                      ? 'Updated recently'
+                      : book.statusText,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
             if (book.rating > 0)
-              ...List.generate(
-                book.rating.round().clamp(0, 5),
-                (_) => const Padding(
-                  padding: EdgeInsets.only(right: 2),
-                  child: Icon(
-                    Icons.star_rounded,
-                    size: 15,
-                    color: Color(0xFFF3C623),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(
+                  book.rating.round().clamp(0, 5),
+                  (_) => const Padding(
+                    padding: EdgeInsets.only(right: 2),
+                    child: Icon(
+                      Icons.star_rounded,
+                      size: 15,
+                      color: Color(0xFFF3C623),
+                    ),
                   ),
                 ),
               ),
           ],
         ),
         const SizedBox(height: 10),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            if (book.isCompleted)
-              const Padding(
-                padding: EdgeInsets.only(right: 6),
-                child: Icon(
-                  Icons.check_circle_outline_rounded,
-                  size: 14,
-                  color: AppTheme.brand,
-                ),
+            if (book.isCompleted) ...[
+              const Icon(
+                Icons.check_circle_outline_rounded,
+                size: 14,
+                color: AppTheme.brand,
               ),
-            if (book.isCompleted)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Text(
-                  'Completed',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: AppTheme.brand),
-                ),
+              Text(
+                'Completed',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: AppTheme.brand),
               ),
+            ],
             _GenreTag(
               label: book.primaryGenre.isEmpty ? 'Novel' : book.primaryGenre,
             ),
-            if (book.secondaryGenre.isNotEmpty) ...[
-              const SizedBox(width: 6),
+            if (book.secondaryGenre.isNotEmpty)
               _GenreTag(label: book.secondaryGenre),
-            ],
-            const Spacer(),
             ElevatedButton(
               onPressed: onRead,
               style: ElevatedButton.styleFrom(
@@ -647,11 +670,13 @@ class _GenrePillRow extends StatelessWidget {
   const _GenrePillRow({
     required this.topics,
     required this.books,
+    required this.apiService,
     required this.onOpenExplore,
   });
 
   final List<ExploreTopicModel> topics;
   final List<BookCardModel> books;
+  final ApiService apiService;
   final VoidCallback onOpenExplore;
 
   @override
@@ -706,7 +731,9 @@ class _GenrePillRow extends StatelessWidget {
                     image: cover == null || cover.coverPath.isEmpty
                         ? null
                         : DecorationImage(
-                            image: AssetImage(cover.coverPath),
+                            image: NetworkImage(
+                              apiService.resolveAssetUrl(cover.coverPath),
+                            ),
                             fit: BoxFit.cover,
                             colorFilter: ColorFilter.mode(
                               Colors.black.withValues(alpha: 0.35),
@@ -823,6 +850,7 @@ class _CategoryTabs extends StatelessWidget {
             onTap: () => tabController.animateTo(index),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   labels[index],
@@ -831,7 +859,7 @@ class _CategoryTabs extends StatelessWidget {
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
                   height: 3,
@@ -850,9 +878,14 @@ class _CategoryTabs extends StatelessWidget {
 }
 
 class _StoryCard extends StatelessWidget {
-  const _StoryCard({required this.book, this.width = 140});
+  const _StoryCard({
+    required this.book,
+    required this.apiService,
+    this.width = 140,
+  });
 
   final BookCardModel book;
+  final ApiService apiService;
   final double width;
 
   @override
@@ -878,8 +911,8 @@ class _StoryCard extends StatelessWidget {
           children: [
             // Background image or gradient
             book.coverPath.isNotEmpty
-                ? Image.asset(
-                    book.coverPath,
+                ? Image.network(
+                    apiService.resolveAssetUrl(book.coverPath),
                     fit: BoxFit.cover,
                     errorBuilder: (_, _, _) => _BookCoverFallback(color: color),
                   )
@@ -896,35 +929,40 @@ class _StoryCard extends StatelessWidget {
               ),
             ),
 
-            // Content
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    book.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontFamily: 'serif',
-                      fontWeight: FontWeight.w600,
+            // Content - positioned at bottom to avoid overflow
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      book.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontFamily: 'serif',
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'by ${book.author}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.white70,
-                      fontSize: 12,
+                    const SizedBox(height: 4),
+                    Text(
+                      'by ${book.author}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -959,10 +997,10 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   _TabBarDelegate({required this.child});
 
   @override
-  double get maxExtent => 50;
+  double get maxExtent => 64;
 
   @override
-  double get minExtent => 50;
+  double get minExtent => 64;
 
   @override
   Widget build(
@@ -1241,9 +1279,9 @@ class StoryDetailScreen extends StatelessWidget {
     if (!context.mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Saved to your library')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Saved to your library')));
   }
 
   @override
