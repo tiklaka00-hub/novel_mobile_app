@@ -32,7 +32,10 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   bool _isCompleted(LibraryEntryModel e) {
     final s = e.readingStatus.toLowerCase().trim();
-    return s == 'completed' || s == 'complete' || s == 'finished' || s == 'done';
+    return s == 'completed' ||
+        s == 'complete' ||
+        s == 'finished' ||
+        s == 'done';
   }
 
   @override
@@ -91,7 +94,10 @@ class _LibraryScreenState extends State<LibraryScreen>
           decoration: const InputDecoration(hintText: 'List name'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, c.text.trim()),
             child: const Text('Create'),
@@ -110,7 +116,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       await _loadLists();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
   }
@@ -147,7 +155,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       await _loadEntries();
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$err')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$err')));
       }
     }
   }
@@ -158,7 +168,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       await _loadEntries();
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$err')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$err')));
       }
     }
   }
@@ -175,9 +187,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           child: Text(
             'Library',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w600,
-                ),
+              fontSize: 26,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         TabBar(
@@ -270,18 +282,17 @@ class _EntriesList extends StatelessWidget {
           Text(
             history ? 'Reading History' : 'My Books',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                ),
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+            ),
           ),
           if (history) ...[
             const SizedBox(height: 8),
             Text(
               'Mark Completed from Current Reads to sync here.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: AppTheme.muted),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
             ),
           ],
           const SizedBox(height: 18),
@@ -310,12 +321,16 @@ class _EntriesList extends StatelessWidget {
                       ? Image.network(
                           api.resolveAssetUrl(e.book.coverPath),
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
+                          errorBuilder: (_, _, _) =>
                               const ColoredBox(color: Color(0xFFE4E4E4)),
                         )
                       : const ColoredBox(color: Color(0xFFE4E4E4)),
                 ),
-                title: Text(e.book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                title: Text(
+                  e.book.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 subtitle: Text('${e.readingStatus} · ${e.primaryGenre}'),
                 trailing: PopupMenuButton<String>(
                   onSelected: (v) {
@@ -325,7 +340,9 @@ class _EntriesList extends StatelessWidget {
                   itemBuilder: (_) => [
                     PopupMenuItem(
                       value: 'status',
-                      child: Text(history ? 'Mark as Reading' : 'Mark as Completed'),
+                      child: Text(
+                        history ? 'Mark as Reading' : 'Mark as Completed',
+                      ),
                     ),
                     const PopupMenuItem(value: 'delete', child: Text('Delete')),
                   ],
@@ -372,24 +389,26 @@ class _ListsPane extends StatelessWidget {
           Text(
             'Private Reading Lists',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                ),
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
             'Tap a list to open, add, or remove stories.',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: AppTheme.muted),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
           ),
           const SizedBox(height: 18),
           if (loading)
             const Center(child: CircularProgressIndicator())
           else if (lists.isEmpty)
             const Center(
-              child: Text('No lists yet', style: TextStyle(color: AppTheme.muted)),
+              child: Text(
+                'No lists yet',
+                style: TextStyle(color: AppTheme.muted),
+              ),
             )
           else
             ...lists.map(
@@ -496,8 +515,9 @@ class _ListDetailState extends State<_ListDetail> {
                 if (mounted) Navigator.pop(context);
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text('$e')));
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text('$e')));
                 }
               }
             },
@@ -516,10 +536,12 @@ class _ListDetailState extends State<_ListDetail> {
                   trailing: IconButton(
                     icon: const Icon(Icons.remove_circle_outline),
                     onPressed: () async {
-                      final itemId = (it['item_id'] as num?)?.toInt();
+                      final itemId = (it['id'] as num?)?.toInt();
                       if (itemId == null) return;
-                      await widget.api
-                          .removeReadingListItem(widget.listId, itemId);
+                      await widget.api.removeReadingListItem(
+                        widget.listId,
+                        itemId,
+                      );
                       await _load();
                     },
                   ),

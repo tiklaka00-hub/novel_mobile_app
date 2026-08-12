@@ -79,6 +79,7 @@ class BookCardModel {
     required this.id,
     required this.title,
     required this.author,
+    this.authorUserId,
     required this.coverPath,
     required this.accentHex,
     required this.description,
@@ -94,6 +95,7 @@ class BookCardModel {
   final int id;
   final String title;
   final String author;
+  final int? authorUserId;
   final String coverPath;
   final String accentHex;
   final String description;
@@ -110,6 +112,7 @@ class BookCardModel {
       id: map['id'] as int,
       title: map['title'] as String,
       author: map['author'] as String? ?? '',
+      authorUserId: (map['author_user_id'] as num?)?.toInt(),
       coverPath: map['cover_path'] as String? ?? '',
       accentHex: map['accent_hex'] as String? ?? '#A1A1A1',
       description: map['description'] as String? ?? '',
@@ -135,6 +138,9 @@ class BookDetailModel {
     required this.rating,
     required this.genre,
     required this.cta,
+    this.coverPath = '',
+    this.tags = const [],
+    this.authorUserId,
   });
 
   final int id;
@@ -145,6 +151,9 @@ class BookDetailModel {
   final double rating;
   final String genre;
   final String cta;
+  final String coverPath;
+  final List<String> tags;
+  final int? authorUserId;
 
   factory BookDetailModel.fromMap(Map<String, dynamic> map) {
     return BookDetailModel(
@@ -156,6 +165,9 @@ class BookDetailModel {
       rating: (map['rating'] as num).toDouble(),
       genre: map['genre'] as String,
       cta: map['cta'] as String? ?? 'Read now',
+      coverPath: map['cover_path'] as String? ?? '',
+      tags: List<String>.from(map['tags'] as List<dynamic>? ?? <dynamic>[]),
+      authorUserId: (map['author_user_id'] as num?)?.toInt(),
     );
   }
 }
@@ -296,8 +308,11 @@ class MenuItemModel {
 
 class ProfileModel {
   const ProfileModel({
+    this.id,
     required this.displayName,
     required this.username,
+    required this.photoUrl,
+    required this.coverUrl,
     required this.following,
     required this.followers,
     required this.blocked,
@@ -307,8 +322,11 @@ class ProfileModel {
     required this.readingLists,
   });
 
+  final int? id;
   final String displayName;
   final String username;
+  final String photoUrl;
+  final String coverUrl;
   final int following;
   final int followers;
   final int blocked;
@@ -319,8 +337,11 @@ class ProfileModel {
 
   factory ProfileModel.fromMap(Map<String, dynamic> map) {
     return ProfileModel(
+      id: (map['id'] as num?)?.toInt(),
       displayName: map['display_name'] as String,
       username: map['username'] as String,
+      photoUrl: map['photo_url'] as String? ?? '',
+      coverUrl: map['cover_url'] as String? ?? '',
       following: map['following'] as int,
       followers: map['followers'] as int,
       blocked: map['blocked'] as int,

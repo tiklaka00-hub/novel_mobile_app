@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sqlite3
 from pathlib import Path
@@ -45,22 +47,29 @@ REQUIRED_TABLES = {
 }
 
 SEED_CATEGORIES = [
+    ("New", 0, "discover", 1),
+    ("Popular", 0, "discover", 2),
+    ("Fanfiction", 0, "discover", 3),
+    ("Newsfeed", 0, "discover", 4),
     ("Editor's Picks", 0, "discover", 5),
     ("Rising", 0, "discover", 6),
-    ("Popular", 0, "discover", 7),
-    ("Fanfaction", 0, "discover", 8),
-    ("Activity", 0, "discover", 9),
+    ("Fanfiction", 100, "explore", 1),
+    ("Fantasy", 31, "explore", 2),
+    ("Poetry", 14, "explore", 3),
+    ("Adventure", 35, "explore", 4),
+    ("Horror", 29, "explore", 5),
+    ("Thriller", 35, "explore", 6),
+    ("Young Adult", 0, "explore", 7),
+    ("LGBTQ+", 0, "explore", 8),
+    ("Literary Fiction", 0, "explore", 9),
+    ("Historical Fiction", 0, "explore", 10),
+    ("Erotica", 32, "explore", 11),
+    ("Mystery", 32, "explore", 12),
+    ("SciFi", 31, "explore", 13),
+    ("Humor", 24, "explore", 14),
     ("Drama", 28, "explore", 15),
     ("Romance", 41, "explore", 16),
     ("Paranormal", 19, "explore", 17),
-    ("Fantasy", 36, "explore", 18),
-    ("Sci-Fi", 22, "explore", 19),
-    ("Adventure", 18, "explore", 20),
-    ("Action", 17, "explore", 21),
-    ("Young Adult", 26, "explore", 22),
-    ("Horror", 13, "explore", 23),
-    ("LGBTQ+", 11, "explore", 24),
-    ("Erotica", 8, "explore", 25),
 ]
 
 SEED_BOOKS = [
@@ -225,6 +234,39 @@ SEED_NOTIFICATIONS = [
     ("System", "App update", "Content refreshed. Pull to refresh Discover for the latest stories.", "Now", 2),
 ]
 
+SEED_MENU_ITEMS = [
+    ("Profile", 1, "My Profile", "person", "profile", 1),
+    ("Profile", 1, "Reading Stats", "bar_chart", "stats", 2),
+    ("Community", 2, "Groups", "groups", "groups", 1),
+    ("Support", 3, "Help Center", "help", "help", 1),
+    ("Support", 3, "Contact Us", "chat", "contact", 2),
+    ("Settings", 4, "Notifications", "notifications", "notifications", 1),
+    ("Settings", 4, "App Language", "language", "language", 2),
+    ("Settings", 4, "Favourite Genres", "favorite", "genres", 3),
+    ("Settings", 4, "AI Content Review", "auto_awesome", "ai-review", 4),
+    ("Settings", 4, "Content Warnings", "warning", "warnings", 5),
+    ("Legal", 5, "Manage Cookie Preferences", "cookie", "cookies", 1),
+    ("Legal", 5, "Terms of Service", "description", "terms", 2),
+    ("Legal", 5, "Privacy Policy", "lock", "privacy", 3),
+    ("Change Accounts", 6, "Sign Out", "logout", "logout", 1),
+]
+
+SEED_READING_LISTS = [
+    (1, "Currently Reading", 2, "story_card_images/8de846ae-c1cc-4e8b-a52e-e8aa48b6abb1.jpg", 1),
+    (1, "Archived / Finished Books", 0, "story_card_images/6290b4c8-83e9-4d5d-a740-06d4ec94d335.jpg", 2),
+]
+
+SEED_ACHIEVEMENTS = [
+    ("Lifetime Reviews Given", 1, "Reviewer-in-Training", "0/1 Reviews Left", "0/1 Reviews Left", "1", "silver", 1),
+    ("Lifetime Reviews Given", 1, "Community Voice", "0/2 Reviews Left", "0/2 Reviews Left", "2", "silver", 2),
+    ("Lifetime Reviews Given", 1, "Story Critic", "0/3 Reviews Left", "0/3 Reviews Left", "3", "silver", 3),
+    ("Lifetime Words Published", 2, "Ink Sprout", "0/1000 Words Published", "0/1000 Words Published", "1000", "dark", 1),
+    ("Lifetime Words Published", 2, "Wordsmith", "0/5000 Words Published", "0/5000 Words Published", "5000", "dark", 2),
+    ("Lifetime Words Published", 2, "Pen Prodigy", "0/10000 Words Published", "0/10000 Words Published", "10000", "dark", 3),
+    ("Lifetime Reading", 3, "Page Flipper", "0/2 Chapters Read", "0/2 Chapters Read", "2", "ink", 1),
+    ("Lifetime Reading", 3, "Book Explorer", "0/5 Chapters Read", "0/5 Chapters Read", "5", "ink", 2),
+    ("Lifetime Reading", 3, "Reading Enthusiast", "0/10 Chapters Read", "0/10 Chapters Read", "10", "ink", 3),
+]
 
 
 def _to_db_query(query: str) -> str:
@@ -459,11 +501,57 @@ def _create_sqlite_schema(connection) -> None:
         CREATE TABLE IF NOT EXISTS reading_lists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             profile_id INTEGER NOT NULL,
+            user_id INTEGER,
             name TEXT NOT NULL,
             story_count INTEGER NOT NULL DEFAULT 0,
             cover_path TEXT NOT NULL DEFAULT '',
             sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (profile_id) REFERENCES profiles(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reading_list_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reading_list_id INTEGER NOT NULL,
+            book_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (reading_list_id) REFERENCES reading_lists(id) ON DELETE CASCADE,
+            FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_by_admin INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS book_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
+            UNIQUE (book_id, tag_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS book_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL,
+            comment TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS author_follows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES app_users(id) ON DELETE CASCADE,
+            UNIQUE (user_id, author_id)
         );
 
         CREATE TABLE IF NOT EXISTS achievements (
@@ -596,6 +684,7 @@ def _run_startup_migrations_sqlite(connection) -> dict[str, int]:
                 provider_subject TEXT,
                 display_name TEXT NOT NULL,
                 photo_url TEXT,
+                cover_url TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_login_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -603,6 +692,10 @@ def _run_startup_migrations_sqlite(connection) -> dict[str, int]:
             """
         )
         result["tables_added"] += 1
+
+    if not _sqlite_column_exists(cursor, "app_users", "cover_url"):
+        cursor.execute("ALTER TABLE app_users ADD COLUMN cover_url TEXT")
+        result["columns_added"] += 1
 
     if not _sqlite_column_exists(cursor, "library_entries", "user_id"):
         cursor.execute("ALTER TABLE library_entries ADD COLUMN user_id INTEGER")
@@ -615,6 +708,81 @@ def _run_startup_migrations_sqlite(connection) -> dict[str, int]:
     if not _sqlite_column_exists(cursor, "reading_lists", "user_id"):
         cursor.execute("ALTER TABLE reading_lists ADD COLUMN user_id INTEGER")
         result["columns_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "reading_list_items"):
+        cursor.execute(
+            """
+            CREATE TABLE reading_list_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reading_list_id INTEGER NOT NULL,
+                book_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (reading_list_id) REFERENCES reading_lists(id) ON DELETE CASCADE,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "tags"):
+        cursor.execute(
+            """
+            CREATE TABLE tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_by_admin INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "book_tags"):
+        cursor.execute(
+            """
+            CREATE TABLE book_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
+                UNIQUE (book_id, tag_id)
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "book_reviews"):
+        cursor.execute(
+            """
+            CREATE TABLE book_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                rating INTEGER NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    if not _sqlite_table_exists(cursor, "author_follows"):
+        cursor.execute(
+            """
+            CREATE TABLE author_follows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                author_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (author_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                UNIQUE (user_id, author_id)
+            )
+            """
+        )
+        result["tables_added"] += 1
 
     if not _sqlite_table_exists(cursor, "chat_messages"):
         cursor.execute(
@@ -734,6 +902,98 @@ def _run_startup_migrations_sqlite(connection) -> dict[str, int]:
             cursor.execute(
                 "INSERT INTO notifications (tab_name, title, message, created_at, sort_order) VALUES (?, ?, ?, ?, ?)",
                 (tab_name, title, message, created_at, sort_order),
+            )
+
+    # Seed default menu items and achievements for the More/Explore UI (SQLite)
+    SEED_MENU_ITEMS_SQLITE = [
+        ("Profile", 1, "My Profile", "person", "profile", 1),
+        ("Community", 2, "Groups", "groups", "groups", 1),
+        ("Support", 3, "Help Center", "help", "help", 1),
+        ("Support", 3, "Contact Us", "chat", "contact", 2),
+        ("Settings", 4, "Notifications", "notifications", "notifications", 1),
+    ]
+    for section_name, section_order, label, icon_name, route_name, sort_order in SEED_MENU_ITEMS_SQLITE:
+        cursor.execute(
+            "SELECT id FROM menu_items WHERE section_name=? AND label=? LIMIT 1",
+            (section_name, label),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO menu_items (section_name, section_order, label, icon_name, route_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)",
+                (section_name, section_order, label, icon_name, route_name, sort_order),
+            )
+
+    SEED_ACHIEVEMENTS_SQLITE = [
+        ("Engagement", 1, "First Read", "Read your first chapter", "1/1", "badge", 1),
+        ("Milestones", 2, "10 Chapters", "Read 10 chapters", "10/10", "badge", 1),
+    ]
+    for group_name, group_order, title, subtitle, progress_label, style, sort_order in SEED_ACHIEVEMENTS_SQLITE:
+        cursor.execute(
+            "SELECT id FROM achievements WHERE group_name=? AND title=? LIMIT 1",
+            (group_name, title),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO achievements (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (group_name, group_order, title, subtitle, progress_label, progress_label, style, sort_order),
+            )
+
+    for section_name, section_order, label, icon_name, route_name, sort_order in SEED_MENU_ITEMS:
+        cursor.execute(
+            "SELECT id FROM menu_items WHERE section_name=? AND label=? LIMIT 1",
+            (section_name, label),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO menu_items (section_name, section_order, label, icon_name, route_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)",
+                (section_name, section_order, label, icon_name, route_name, sort_order),
+            )
+
+    cursor.execute("SELECT id FROM write_screen LIMIT 1")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "INSERT INTO write_screen (manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta) VALUES (?, ?, ?, ?, ?, ?)",
+            ("Drafts,Published", "Stories,Series", "Filter", "Sort", "Nothing here yet", "Create story"),
+        )
+
+    cursor.execute("SELECT id FROM profiles LIMIT 1")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "INSERT INTO profiles (display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("Guest User", "guest", 0, 0, 0, 0, 0, 0),
+        )
+
+    # Ensure there's at least one sample reading list associated with the default profile (SQLite)
+    cursor.execute("SELECT id FROM profiles LIMIT 1")
+    profile_row = cursor.fetchone()
+    profile_id = profile_row[0] if profile_row is not None else 1
+    cursor.execute("SELECT id FROM reading_lists WHERE name=? LIMIT 1", ("hello",))
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order) VALUES (?, ?, ?, ?, ?)",
+            (profile_id, "hello", 0, "", 1),
+        )
+
+    for profile_id, name, story_count, cover_path, sort_order in SEED_READING_LISTS:
+        cursor.execute(
+            "SELECT id FROM reading_lists WHERE profile_id=? AND name=? LIMIT 1",
+            (profile_id, name),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order) VALUES (?, ?, ?, ?, ?)",
+                (profile_id, name, story_count, cover_path, sort_order),
+            )
+
+    for group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order in SEED_ACHIEVEMENTS:
+        cursor.execute(
+            "SELECT id FROM achievements WHERE group_name=? AND title=? LIMIT 1",
+            (group_name, title),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO achievements (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order),
             )
 
     static_story_dir = Path(__file__).resolve().parents[2] / "story_card_images"
@@ -1051,6 +1311,98 @@ def run_startup_migrations() -> dict[str, int]:
             cursor.execute(
                 "INSERT INTO notifications (tab_name, title, message, created_at, sort_order) VALUES (%s, %s, %s, %s, %s)",
                 (tab_name, title, message, created_at, sort_order),
+            )
+
+    # Seed default menu items and achievements for the More/Explore UI (MySQL)
+    SEED_MENU_ITEMS_MYSQL = [
+        ("Profile", 1, "My Profile", "person", "profile", 1),
+        ("Community", 2, "Groups", "groups", "groups", 1),
+        ("Support", 3, "Help Center", "help", "help", 1),
+        ("Support", 3, "Contact Us", "chat", "contact", 2),
+        ("Settings", 4, "Notifications", "notifications", "notifications", 1),
+    ]
+    for section_name, section_order, label, icon_name, route_name, sort_order in SEED_MENU_ITEMS_MYSQL:
+        cursor.execute(
+            "SELECT id FROM menu_items WHERE section_name=%s AND label=%s LIMIT 1",
+            (section_name, label),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO menu_items (section_name, section_order, label, icon_name, route_name, sort_order) VALUES (%s, %s, %s, %s, %s, %s)",
+                (section_name, section_order, label, icon_name, route_name, sort_order),
+            )
+
+    SEED_ACHIEVEMENTS_MYSQL = [
+        ("Engagement", 1, "First Read", "Read your first chapter", "1/1", "badge", 1),
+        ("Milestones", 2, "10 Chapters", "Read 10 chapters", "10/10", "badge", 1),
+    ]
+    for group_name, group_order, title, subtitle, progress_label, style, sort_order in SEED_ACHIEVEMENTS_MYSQL:
+        cursor.execute(
+            "SELECT id FROM achievements WHERE group_name=%s AND title=%s LIMIT 1",
+            (group_name, title),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO achievements (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (group_name, group_order, title, subtitle, progress_label, progress_label, style, sort_order),
+            )
+
+    for section_name, section_order, label, icon_name, route_name, sort_order in SEED_MENU_ITEMS:
+        cursor.execute(
+            "SELECT id FROM menu_items WHERE section_name=%s AND label=%s LIMIT 1",
+            (section_name, label),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO menu_items (section_name, section_order, label, icon_name, route_name, sort_order) VALUES (%s, %s, %s, %s, %s, %s)",
+                (section_name, section_order, label, icon_name, route_name, sort_order),
+            )
+
+    cursor.execute("SELECT id FROM write_screen LIMIT 1")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "INSERT INTO write_screen (manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("Drafts,Published", "Stories,Series", "Filter", "Sort", "Nothing here yet", "Create story"),
+        )
+
+    cursor.execute("SELECT id FROM profiles LIMIT 1")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "INSERT INTO profiles (display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            ("Guest User", "guest", 0, 0, 0, 0, 0, 0),
+        )
+
+    # Ensure there's at least one sample reading list associated with the default profile (MySQL)
+    cursor.execute("SELECT id FROM profiles LIMIT 1")
+    profile_row = cursor.fetchone()
+    profile_id = profile_row[0] if profile_row is not None else 1
+    cursor.execute("SELECT id FROM reading_lists WHERE name=%s LIMIT 1", ("hello",))
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order) VALUES (%s, %s, %s, %s, %s)",
+            (profile_id, "hello", 0, "", 1),
+        )
+
+    for profile_id, name, story_count, cover_path, sort_order in SEED_READING_LISTS:
+        cursor.execute(
+            "SELECT id FROM reading_lists WHERE profile_id=%s AND name=%s LIMIT 1",
+            (profile_id, name),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order) VALUES (%s, %s, %s, %s, %s)",
+                (profile_id, name, story_count, cover_path, sort_order),
+            )
+
+    for group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order in SEED_ACHIEVEMENTS:
+        cursor.execute(
+            "SELECT id FROM achievements WHERE group_name=%s AND title=%s LIMIT 1",
+            (group_name, title),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "INSERT INTO achievements (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order),
             )
 
     static_story_dir = Path(__file__).resolve().parents[2] / "story_card_images"

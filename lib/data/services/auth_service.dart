@@ -99,6 +99,11 @@ class AuthService {
       throw Exception('Google sign-in was cancelled.');
     }
     final auth = await user.authentication;
+    if (auth.idToken == null && auth.accessToken == null) {
+      throw Exception(
+        'Google sign-in returned no token. Configure GOOGLE_CLIENT_ID when building the app and ensure your Android OAuth client ID is allowed by the backend.',
+      );
+    }
     final payload = await _apiService.verifyGoogleSignIn(
       idToken: auth.idToken,
       accessToken: auth.accessToken,

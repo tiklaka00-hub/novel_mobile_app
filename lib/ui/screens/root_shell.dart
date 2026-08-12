@@ -146,14 +146,7 @@ class _RootShellState extends State<RootShell> {
         apiService: _apiService,
         onOpenDiscover: () => setState(() => _selectedIndex = 1),
       ),
-      DiscoverScreen(
-        data: _bootstrap!,
-        apiService: _apiService,
-        onOpenSupport: () {
-          setState(() => _selectedIndex = 4);
-        },
-        onChangeAccount: _signOut,
-      ),
+      DiscoverScreen(data: _bootstrap!, apiService: _apiService),
       WriteScreen(data: _bootstrap!, apiService: _apiService),
       NotificationsScreen(
         data: _bootstrap!,

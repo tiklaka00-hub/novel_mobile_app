@@ -19,6 +19,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   final _summaryController = TextEditingController();
   final _authorController = TextEditingController();
   final _genreController = TextEditingController();
+  final _tagsController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
   bool _saving = false;
   String _coverPath = '';
@@ -34,6 +35,11 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       _authorController.text = widget.story!['author']?.toString() ?? '';
       _genreController.text = widget.story!['genre']?.toString() ?? '';
       _coverPath = widget.story!['cover_path']?.toString() ?? '';
+      _tagsController.text =
+          (widget.story!['tags'] as List<dynamic>?)
+              ?.map((item) => item.toString())
+              .join(', ') ??
+          '';
     }
   }
 
@@ -54,9 +60,9 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     }
 
     setState(() => _coverPath = path);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Cover image uploaded')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Cover image uploaded')));
   }
 
   @override
@@ -65,6 +71,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     _summaryController.dispose();
     _authorController.dispose();
     _genreController.dispose();
+    _tagsController.dispose();
     super.dispose();
   }
 
@@ -73,11 +80,12 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     final summary = _summaryController.text.trim();
     final author = _authorController.text.trim();
     final genre = _genreController.text.trim();
+    final tagsText = _tagsController.text.trim();
 
     if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a title')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please enter a title')));
       return;
     }
 
@@ -89,6 +97,13 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         'author': author.isEmpty ? 'Me' : author,
         'genre': genre.isEmpty ? 'Fiction' : genre,
         'cover_path': _coverPath,
+        'tags': tagsText.isEmpty
+            ? <String>[]
+            : tagsText
+                  .split(',')
+                  .map((tag) => tag.trim())
+                  .where((tag) => tag.isNotEmpty)
+                  .toList(),
       };
 
       if (_isEditing) {
@@ -105,9 +120,9 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving story: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error saving story: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -160,7 +175,11 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                         ),
                 ),
                 child: _coverPath.isEmpty
-                    ? const Icon(Icons.book_rounded, color: Colors.white70, size: 48)
+                    ? const Icon(
+                        Icons.book_rounded,
+                        color: Colors.white70,
+                        size: 48,
+                      )
                     : null,
               ),
             ),
@@ -214,6 +233,22 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                 style: const TextStyle(fontSize: 15),
                 decoration: const InputDecoration(
                   hintText: 'e.g. Romance, Fantasy...',
+                  hintStyle: TextStyle(color: AppTheme.muted),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            const SizedBox(height: 20),
+
+            // Tags field
+            _LabeledField(
+              label: 'TAGS',
+              child: TextField(
+                controller: _tagsController,
+                style: const TextStyle(fontSize: 15),
+                decoration: const InputDecoration(
+                  hintText: 'Comma-separated tags, e.g. romance, mystery',
                   hintStyle: TextStyle(color: AppTheme.muted),
                   border: InputBorder.none,
                 ),

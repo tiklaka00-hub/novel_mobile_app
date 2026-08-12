@@ -24,8 +24,6 @@ from pydantic import BaseModel
 
 from .database import (
     get_connection,
-    initialize_database_if_needed,
-    run_startup_migrations,
     USE_SQLITE,
 )
 
@@ -88,6 +86,7 @@ class StoryCreateRequest(BaseModel):
     description: str
     genre: str
     cover_path: str = ""
+    tags: list[str] = []
 
 
 class StoryUpdateRequest(BaseModel):
@@ -96,6 +95,12 @@ class StoryUpdateRequest(BaseModel):
     description: str | None = None
     genre: str | None = None
     cover_path: str | None = None
+    tags: list[str] | None = None
+
+
+class ReviewCreateRequest(BaseModel):
+    rating: int
+    comment: str = ""
 
 
 class ChapterCreateRequest(BaseModel):
@@ -114,6 +119,12 @@ class ChapterUpdateRequest(BaseModel):
     notes: str | None = None
     submission_status: str | None = None
     scheduled_for: str | None = None
+
+
+class ProfileUpdateRequest(BaseModel):
+    display_name: str | None = None
+    photo_url: str | None = None
+    cover_url: str | None = None
 
 
 class CategoryCreateRequest(BaseModel):
@@ -537,6 +548,31 @@ def _normalize_cover_path(path: str | None) -> str:
     return raw
 
 
+def _ensure_default_write_screen() -> None:
+    rows = fetch_all("SELECT id FROM write_screen LIMIT 1")
+    if not rows:
+        execute_write(
+            "INSERT INTO write_screen (manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta) VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                "Drafts,Published",
+                "Stories,Series",
+                "Filter",
+                "Sort",
+                "Nothing here yet",
+                "Create story",
+            ),
+        )
+
+
+def _ensure_default_profile() -> None:
+    rows = fetch_all("SELECT id FROM profiles LIMIT 1")
+    if not rows:
+        execute_write(
+            "INSERT INTO profiles (display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            ("Guest User", "guest", 0, 0, 0, 0, 0, 0),
+        )
+
+
 def _available_story_images() -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     for file_path in sorted(UPLOAD_ROOT.glob("*")):
@@ -567,9 +603,19 @@ def _verify_google_payload(payload: GoogleAuthRequest) -> dict[str, Any]:
             {"id_token": payload.id_token},
         )
         LOGGER.debug("Google tokeninfo (id_token): %s", token_info)
-        audience = token_info.get("aud", "")
+        audience = (
+            token_info.get("aud")
+            or token_info.get("audience")
+            or token_info.get("issued_to")
+            or ""
+        )
         if GOOGLE_CLIENT_IDS and audience not in GOOGLE_CLIENT_IDS:
-            LOGGER.warning("Google audience mismatch: aud=%s allowed=%s tokeninfo=%s", audience, GOOGLE_CLIENT_IDS, token_info)
+            LOGGER.warning(
+                "Google audience mismatch: aud=%s allowed=%s tokeninfo=%s",
+                audience,
+                GOOGLE_CLIENT_IDS,
+                token_info,
+            )
             raise HTTPException(status_code=401, detail="Google audience mismatch")
 
         email = token_info.get("email", "")
@@ -590,9 +636,19 @@ def _verify_google_payload(payload: GoogleAuthRequest) -> dict[str, Any]:
             {"access_token": payload.access_token},
         )
         LOGGER.debug("Google tokeninfo (access_token): %s", token_info)
-        audience = token_info.get("aud", "")
+        audience = (
+            token_info.get("aud")
+            or token_info.get("audience")
+            or token_info.get("issued_to")
+            or ""
+        )
         if GOOGLE_CLIENT_IDS and audience not in GOOGLE_CLIENT_IDS:
-            LOGGER.warning("Google audience mismatch: aud=%s allowed=%s tokeninfo=%s", audience, GOOGLE_CLIENT_IDS, token_info)
+            LOGGER.warning(
+                "Google audience mismatch: aud=%s allowed=%s tokeninfo=%s",
+                audience,
+                GOOGLE_CLIENT_IDS,
+                token_info,
+            )
             raise HTTPException(status_code=401, detail="Google audience mismatch")
 
         user_info = _fetch_google_json(
@@ -625,8 +681,12 @@ def _parse_optional_datetime(value: str | None) -> datetime | None:
         raise HTTPException(status_code=400, detail="Invalid scheduled date") from exc
 
 
-def _serialize_datetime(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+def _serialize_datetime(value: datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 
 def _record_chapter_revision(
@@ -655,14 +715,16 @@ def healthcheck():
 @app.on_event("startup")
 def startup_initialize_database():
     try:
-        initialized = initialize_database_if_needed()
-        migration_report = run_startup_migrations()
-        if initialized:
-            LOGGER.info("Database tables were missing. Schema/data initialized automatically.")
-        LOGGER.info("Startup migrations: %s", migration_report)
+        # Delegate startup tasks (schema init, migrations, seeding, basic checks)
+        from .startup_tasks import run_startup_tasks
+
+        summary = run_startup_tasks()
+        LOGGER.info("Startup tasks summary: %s", summary)
         _content_version_row()
     except DB_INIT_EXCEPTIONS as exc:
         LOGGER.exception("Automatic database initialization failed: %s", exc)
+    except Exception as exc:
+        LOGGER.exception("Unexpected error running startup tasks: %s", exc)
 
 
 @app.get("/api/content/version", response_model=VersionResponse)
@@ -832,15 +894,16 @@ def get_me(user: dict[str, Any] = Depends(require_user)):
     library_count = int(library_count_rows[0]["c"]) if library_count_rows else 0
     reading_list_count = int(reading_list_count_rows[0]["c"]) if reading_list_count_rows else 0
     completed_count = int(completed_rows[0]["c"]) if completed_rows else 0
-    display_name = u.get("display_name") or (u.get("email") or "Reader").split("@")[0]
+    display_name = _row_get(u, "display_name") or (_row_get(u, "email") or "Reader").split("@")[0]
     username = "@" + display_name.lower().replace(" ", "")
     return {
-        "id": u["id"],
-        "email": u.get("email") or "",
+        "id": _row_get(u, "id"),
+        "email": _row_get(u, "email") or "",
         "display_name": display_name,
         "username": username,
-        "photo_url": u.get("photo_url") or "",
-        "provider": u.get("provider") or "",
+        "photo_url": _row_get(u, "photo_url") or "",
+        "cover_url": _row_get(u, "cover_url") or "",
+        "provider": _row_get(u, "provider") or "",
         "following": 0,
         "followers": 0,
         "blocked": 0,
@@ -853,7 +916,104 @@ def get_me(user: dict[str, Any] = Depends(require_user)):
     }
 
 
-@app.get("/api/admin/session")
+@app.get("/api/users/{user_id}")
+def get_user_profile(user_id: int):
+    rows = fetch_all(
+        "SELECT id, email, display_name, photo_url, cover_url, provider FROM app_users WHERE id=%s LIMIT 1",
+        (user_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found")
+    u = rows[0]
+    story_count_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM books WHERE user_id=%s",
+        (user_id,),
+    )
+    library_count_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM library_entries WHERE user_id=%s",
+        (user_id,),
+    )
+    reading_list_count_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM reading_lists WHERE user_id=%s",
+        (user_id,),
+    )
+    completed_rows = fetch_all(
+        """
+        SELECT COUNT(*) AS c FROM library_entries
+        WHERE user_id=%s AND LOWER(reading_status) IN ('completed', 'complete', 'finished', 'done')
+        """,
+        (user_id,),
+    )
+    followers_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM author_follows WHERE author_id=%s",
+        (user_id,),
+    )
+    following_rows = fetch_all(
+        "SELECT COUNT(*) AS c FROM author_follows WHERE user_id=%s",
+        (user_id,),
+    )
+    story_count = int(story_count_rows[0]["c"]) if story_count_rows else 0
+    library_count = int(library_count_rows[0]["c"]) if library_count_rows else 0
+    reading_list_count = int(reading_list_count_rows[0]["c"]) if reading_list_count_rows else 0
+    completed_count = int(completed_rows[0]["c"]) if completed_rows else 0
+    followers = int(followers_rows[0]["c"]) if followers_rows else 0
+    following = int(following_rows[0]["c"]) if following_rows else 0
+    display_name = _row_get(u, "display_name") or (_row_get(u, "email") or "Reader").split("@")[0]
+    username = "@" + display_name.lower().replace(" ", "")
+    return {
+        "id": _row_get(u, "id"),
+        "email": _row_get(u, "email") or "",
+        "display_name": display_name,
+        "username": username,
+        "photo_url": _row_get(u, "photo_url") or "",
+        "cover_url": _row_get(u, "cover_url") or "",
+        "provider": _row_get(u, "provider") or "",
+        "following": following,
+        "followers": followers,
+        "blocked": 0,
+        "chapters_read": completed_count,
+        "social_karma": story_count * 10,
+        "day_streak": 0,
+        "story_count": story_count,
+        "library_count": library_count,
+        "reading_list_count": reading_list_count,
+    }
+
+
+@app.put("/api/me")
+def update_me(
+    payload: ProfileUpdateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    rows = fetch_all(
+        "SELECT id, display_name, photo_url, cover_url FROM app_users WHERE id=%s LIMIT 1",
+        (user["user_id"],),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    current = rows[0]
+    next_display_name = payload.display_name or _row_get(current, "display_name")
+    next_photo_url = payload.photo_url if payload.photo_url is not None else _row_get(current, "photo_url")
+    next_cover_url = payload.cover_url if payload.cover_url is not None else _row_get(current, "cover_url")
+
+    execute_write(
+        """
+        UPDATE app_users
+        SET display_name=%s, photo_url=%s, cover_url=%s, updated_at=CURRENT_TIMESTAMP
+        WHERE id=%s
+        """,
+        (next_display_name, next_photo_url, next_cover_url, user["user_id"]),
+    )
+    return {
+        "ok": True,
+        "display_name": next_display_name,
+        "photo_url": next_photo_url or "",
+        "cover_url": next_cover_url or "",
+    }
+
+
+@app.post("/api/admin/session")
 def admin_session(_: dict[str, Any] = Depends(require_admin)):
     return {"ok": True, "username": ADMIN_USERNAME}
 
@@ -880,8 +1040,7 @@ async def upload_image(
     return {"path": _public_image_path(filename), "filename": filename}
 
 
-@app.post("/api/write/upload-image")
-async def upload_writer_image(file: UploadFile = File(...)):
+async def _save_uploaded_image(file: UploadFile) -> dict[str, str]:
     extension = Path(file.filename or "upload").suffix.lower()
     if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
         raise HTTPException(status_code=400, detail="Unsupported image format")
@@ -891,6 +1050,22 @@ async def upload_writer_image(file: UploadFile = File(...)):
     target_path.write_bytes(await file.read())
     bump_content_version()
     return {"path": _public_image_path(filename), "filename": filename}
+
+
+@app.post("/api/write/upload-image")
+async def upload_writer_image(
+    file: UploadFile = File(...),
+    _user: dict[str, Any] = Depends(require_user),
+):
+    return await _save_uploaded_image(file)
+
+
+@app.post("/api/me/upload-image")
+async def upload_profile_image(
+    file: UploadFile = File(...),
+    _user: dict[str, Any] = Depends(require_user),
+):
+    return await _save_uploaded_image(file)
 
 
 @app.post("/api/support/upload-attachment")
@@ -954,11 +1129,23 @@ def bootstrap():
         if book["section_name"] == "recently_completed"
     ]
 
+    featured_book = {
+        "id": 0,
+        "title": "No featured story available",
+        "author": "",
+        "description": "",
+        "status_text": "",
+        "rating": 0,
+        "genre": "",
+        "cta": "Read now",
+        "cover_path": "",
+        "tags": [],
+    }
+
     featured_candidates = [b for b in books if b["section_name"] == "featured"]
     if not featured_candidates:
         featured_candidates = books[:1]
 
-    featured_book = None
     if featured_candidates:
         featured_raw = featured_candidates[0]
         featured_book = {
@@ -970,6 +1157,8 @@ def bootstrap():
             "rating": featured_raw["rating"],
             "genre": featured_raw["genre"],
             "cta": featured_raw["cta_label"],
+            "cover_path": _normalize_cover_path(featured_raw["cover_path"]),
+            "tags": _story_tags_for_book(featured_raw["id"]),
         }
 
     library_entries = fetch_all(
@@ -1000,6 +1189,12 @@ def bootstrap():
         }
         for row in library_entries
     ]
+
+    _ensure_default_write_screen()
+    _ensure_default_profile()
+
+    _ensure_default_write_screen()
+    _ensure_default_profile()
 
     write_meta_rows = fetch_all(
         "SELECT manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta FROM write_screen LIMIT 1"
@@ -1354,7 +1549,7 @@ def get_public_reading_lists(user: dict[str, Any] = Depends(require_user)):
     )
     return {
         "items": [
-            {**row, "cover_path": _normalize_cover_path(row.get("cover_path"))}
+            {**row, "cover_path": _normalize_cover_path(_row_get(row, "cover_path"))}
             for row in rows
         ]
     }
@@ -1385,6 +1580,107 @@ def create_public_reading_list(
     return {"ok": True, "id": row_id}
 
 
+@app.get("/api/reading-lists/{reading_list_id}")
+def get_reading_list_detail(
+    reading_list_id: int,
+    user: dict[str, Any] = Depends(require_user),
+):
+    rows = fetch_all(
+        "SELECT id, profile_id, user_id, name, story_count, cover_path, sort_order FROM reading_lists WHERE id=%s AND (user_id=%s OR user_id IS NULL)",
+        (reading_list_id, user["user_id"]),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reading list not found")
+
+    items = fetch_all(
+        "SELECT r.id, r.book_id, b.title, b.author, b.cover_path, b.genre, r.created_at FROM reading_list_items r JOIN books b ON b.id = r.book_id WHERE r.reading_list_id=%s ORDER BY r.created_at DESC",
+        (reading_list_id,),
+    )
+    return {
+        **rows[0],
+        "cover_path": _normalize_cover_path(_row_get(rows[0], "cover_path")),
+        "items": [
+            {
+                **item,
+                "cover_path": _normalize_cover_path(_row_get(item, "cover_path")),
+            }
+            for item in items
+        ],
+    }
+
+
+@app.post("/api/reading-lists/{reading_list_id}/items")
+def add_reading_list_item(
+    reading_list_id: int,
+    payload: dict[str, Any],
+    user: dict[str, Any] = Depends(require_user),
+):
+    rows = fetch_all(
+        "SELECT id FROM reading_lists WHERE id=%s AND (user_id=%s OR user_id IS NULL)",
+        (reading_list_id, user["user_id"]),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reading list not found")
+
+    book_id = int(payload.get("book_id", 0))
+    book_rows = fetch_all("SELECT id FROM books WHERE id=%s", (book_id,))
+    if not book_rows:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    item_id, _ = execute_write(
+        "INSERT INTO reading_list_items (reading_list_id, book_id) VALUES (%s, %s)",
+        (reading_list_id, book_id),
+    )
+    execute_write(
+        "UPDATE reading_lists SET story_count = story_count + 1 WHERE id=%s",
+        (reading_list_id,),
+    )
+    bump_content_version()
+    return {"ok": True, "id": item_id}
+
+
+@app.delete("/api/reading-lists/{reading_list_id}/items/{item_id}")
+def remove_reading_list_item(
+    reading_list_id: int,
+    item_id: int,
+    user: dict[str, Any] = Depends(require_user),
+):
+    rows = fetch_all(
+        "SELECT id FROM reading_lists WHERE id=%s AND (user_id=%s OR user_id IS NULL)",
+        (reading_list_id, user["user_id"]),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reading list not found")
+
+    _, affected = execute_write(
+        "DELETE FROM reading_list_items WHERE id=%s AND reading_list_id=%s",
+        (item_id, reading_list_id),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    execute_write(
+        "UPDATE reading_lists SET story_count = MAX(0, story_count - 1) WHERE id=%s",
+        (reading_list_id,),
+    )
+    bump_content_version()
+    return {"ok": True}
+
+
+@app.delete("/api/reading-lists/{reading_list_id}")
+def delete_reading_list(
+    reading_list_id: int,
+    user: dict[str, Any] = Depends(require_user),
+):
+    _, affected = execute_write(
+        "DELETE FROM reading_lists WHERE id=%s AND (user_id=%s OR user_id IS NULL)",
+        (reading_list_id, user["user_id"]),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Reading list not found")
+    bump_content_version()
+    return {"ok": True}
+
+
 @app.get("/api/write/stories")
 def get_writer_stories(user: dict[str, Any] = Depends(require_user)):
     rows = fetch_all(
@@ -1397,10 +1693,7 @@ def get_writer_stories(user: dict[str, Any] = Depends(require_user)):
         (user["user_id"],),
     )
     return {
-        "items": [
-            {**row, "cover_path": _normalize_cover_path(row["cover_path"])}
-            for row in rows
-        ]
+        "items": [_serialize_book(row) for row in rows]
     }
 
 
@@ -1424,9 +1717,9 @@ def get_story_chapters(story_id: int):
         "items": [
             {
                 **row,
-                "scheduled_for": _serialize_datetime(row.get("scheduled_for")),
-                "created_at": _serialize_datetime(row.get("created_at")),
-                "updated_at": _serialize_datetime(row.get("updated_at")),
+                "scheduled_for": _serialize_datetime(_row_get(row, "scheduled_for")),
+                "created_at": _serialize_datetime(_row_get(row, "created_at")),
+                "updated_at": _serialize_datetime(_row_get(row, "updated_at")),
             }
             for row in rows
         ]
@@ -1448,8 +1741,8 @@ def get_story_chapter_revisions(chapter_id: int):
         "items": [
             {
                 **row,
-                "scheduled_for": _serialize_datetime(row.get("scheduled_for")),
-                "created_at": _serialize_datetime(row.get("created_at")),
+                "scheduled_for": _serialize_datetime(_row_get(row, "scheduled_for")),
+                "created_at": _serialize_datetime(_row_get(row, "created_at")),
             }
             for row in rows
         ]
@@ -1512,12 +1805,12 @@ def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
     current = rows[0]
     next_title = payload.title or current["title"]
     next_content = payload.content if payload.content is not None else current["content"]
-    next_notes = payload.notes if payload.notes is not None else current.get("notes", "")
-    next_status = (payload.submission_status or current.get("submission_status") or "draft").strip() or "draft"
+    next_notes = payload.notes if payload.notes is not None else _row_get(current, "notes", "")
+    next_status = (payload.submission_status or _row_get(current, "submission_status") or "draft").strip() or "draft"
     next_scheduled_for = (
         _parse_optional_datetime(payload.scheduled_for)
         if payload.scheduled_for is not None
-        else current.get("scheduled_for")
+        else _row_get(current, "scheduled_for")
     )
     # Normalize scheduled_for for both SQLite (TEXT) and MySQL (DATETIME).
     scheduled_value = next_scheduled_for
@@ -1570,6 +1863,72 @@ def delete_story_chapter(chapter_id: int):
     return {"ok": True}
 
 
+def _ensure_tags_exist(names: list[str]) -> list[int]:
+    normalized = [name.strip().lstrip('#') for name in names if name.strip()]
+    if not normalized:
+        return []
+
+    placeholders = ",".join(["%s"] * len(normalized))
+    existing = fetch_all(
+        f"SELECT id, name FROM tags WHERE name IN ({placeholders})",
+        tuple(normalized),
+    )
+    name_to_id = {row["name"]: row["id"] for row in existing}
+    for name in normalized:
+        if name not in name_to_id:
+            execute_write(
+                "INSERT INTO tags (name) VALUES (%s)",
+                (name,),
+            )
+
+    all_rows = fetch_all(
+        f"SELECT id, name FROM tags WHERE name IN ({placeholders})",
+        tuple(normalized),
+    )
+    return [row["id"] for row in all_rows]
+
+
+def _set_story_tags(story_id: int, tag_names: list[str]) -> None:
+    if tag_names is None:
+        return
+    tag_ids = _ensure_tags_exist(tag_names)
+    if len(tag_ids) > 3:
+        tag_ids = tag_ids[:3]
+    execute_write("DELETE FROM book_tags WHERE book_id=%s", (story_id,))
+    for tag_id in tag_ids:
+        execute_write(
+            "INSERT OR IGNORE INTO book_tags (book_id, tag_id) VALUES (%s, %s)",
+            (story_id, tag_id),
+        )
+
+
+def _story_tags_for_book(book_id: int) -> list[str]:
+    rows = fetch_all(
+        "SELECT t.name FROM tags t JOIN book_tags bt ON bt.tag_id = t.id WHERE bt.book_id=%s ORDER BY t.name",
+        (book_id,),
+    )
+    return [row["name"] for row in rows]
+
+
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
+def _serialize_book(row: Any) -> dict[str, Any]:
+    data = dict(row) if not isinstance(row, dict) else row
+    return {
+        **data,
+        "cover_path": _normalize_cover_path(_row_get(row, "cover_path")),
+        "author_user_id": _row_get(row, "user_id"),
+        "tags": _story_tags_for_book(_row_get(row, "id")),
+    }
+
+
 @app.post("/api/write/stories")
 def create_writer_story(
     payload: StoryCreateRequest,
@@ -1594,6 +1953,7 @@ def create_writer_story(
             payload.genre,
         ),
     )
+    _set_story_tags(story_id, payload.tags)
     bump_content_version()
     return {"ok": True, "id": story_id}
 
@@ -1615,7 +1975,7 @@ def update_writer_story(
     next_cover = (
         _normalize_cover_path(payload.cover_path)
         if payload.cover_path is not None
-        else current["cover_path"]
+        else _row_get(current, "cover_path")
     )
     _, affected = execute_write(
         """
@@ -1624,11 +1984,11 @@ def update_writer_story(
         WHERE id=%s
         """,
         (
-            payload.title or current["title"],
-            payload.author or current["author"],
-            payload.description or current["description"],
-            payload.genre or current["genre"],
-            payload.genre or current.get("primary_genre") or current["genre"],
+            payload.title or _row_get(current, "title"),
+            payload.author or _row_get(current, "author"),
+            payload.description or _row_get(current, "description"),
+            payload.genre or _row_get(current, "genre"),
+            payload.genre or _row_get(current, "primary_genre") or _row_get(current, "genre"),
             next_cover,
             user["user_id"],
             story_id,
@@ -1636,8 +1996,131 @@ def update_writer_story(
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update story")
+
+    if payload.tags is not None:
+        _set_story_tags(story_id, payload.tags)
+
     bump_content_version()
     return {"ok": True}
+
+
+@app.get("/api/write/stories/{story_id}")
+def get_writer_story(story_id: int):
+    rows = fetch_all(
+        "SELECT id, title, author, description, genre, cover_path, accent_hex, status_text, rating FROM books WHERE id=%s",
+        (story_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Story not found")
+    story = rows[0]
+    return _serialize_book(story)
+
+
+@app.get("/api/books/{book_id}")
+def get_public_book(book_id: int):
+    rows = fetch_all(
+        "SELECT id, user_id, title, author, description, genre, cover_path, accent_hex, status_text, rating FROM books WHERE id=%s",
+        (book_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return _serialize_book(rows[0])
+
+
+@app.get("/api/tags")
+def list_tags(q: str | None = None):
+    if q:
+        like = f"%{q.strip().lstrip('#')}%"
+        rows = fetch_all(
+            "SELECT id, name FROM tags WHERE name LIKE %s ORDER BY name LIMIT 20",
+            (like,),
+        )
+    else:
+        rows = fetch_all("SELECT id, name FROM tags ORDER BY name LIMIT 50")
+    return {"items": [{"id": row["id"], "name": row["name"]} for row in rows]}
+
+
+@app.get("/api/books/{book_id}/reviews")
+def list_book_reviews(book_id: int):
+    rows = fetch_all(
+        "SELECT r.id, r.rating, r.comment, r.created_at, u.display_name FROM book_reviews r JOIN app_users u ON u.id = r.user_id WHERE r.book_id=%s ORDER BY r.created_at DESC",
+        (book_id,),
+    )
+    return {"items": [{"id": row["id"], "rating": row["rating"], "comment": row["comment"], "created_at": row["created_at"], "display_name": row["display_name"]} for row in rows]}
+
+
+@app.post("/api/books/{book_id}/reviews")
+def create_book_review(
+    book_id: int,
+    payload: ReviewCreateRequest,
+    user: dict[str, Any] = Depends(require_user),
+):
+    if payload.rating < 1 or payload.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    execute_write(
+        "INSERT INTO book_reviews (book_id, user_id, rating, comment) VALUES (%s, %s, %s, %s)",
+        (book_id, user["user_id"], payload.rating, payload.comment.strip()),
+    )
+    bump_content_version()
+    return {"ok": True}
+
+
+@app.post("/api/authors/{author_id}/follow")
+def follow_author(author_id: int, user: dict[str, Any] = Depends(require_user)):
+    if user["user_id"] == author_id:
+        raise HTTPException(status_code=400, detail="Cannot follow yourself")
+    execute_write(
+        "INSERT OR IGNORE INTO author_follows (user_id, author_id) VALUES (%s, %s)",
+        (user["user_id"], author_id),
+    )
+    return {"ok": True}
+
+
+@app.get("/api/authors/{author_id}/follow")
+def check_author_follow(author_id: int, user: dict[str, Any] = Depends(require_user)):
+    rows = fetch_all(
+        "SELECT id FROM author_follows WHERE user_id=%s AND author_id=%s",
+        (user["user_id"], author_id),
+    )
+    return {"following": bool(rows)}
+
+
+@app.delete("/api/authors/{author_id}/follow")
+def unfollow_author(author_id: int, user: dict[str, Any] = Depends(require_user)):
+    _, affected = execute_write(
+        "DELETE FROM author_follows WHERE user_id=%s AND author_id=%s",
+        (user["user_id"], author_id),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Follow not found")
+    return {"ok": True}
+
+
+@app.get("/api/authors/follow")
+def fetch_authors_follow(
+    ids: str = Query(default=""), user: dict[str, Any] = Depends(require_user)
+):
+    # ids expected as comma-separated list of author ids, e.g. ids=1,2,3
+    raw = ids or ""
+    id_list = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            id_list.append(int(part))
+        except ValueError:
+            continue
+    if not id_list:
+        return {"following": {}}
+
+    placeholders = ",".join(["%s"] * len(id_list))
+    sql = f"SELECT author_id FROM author_follows WHERE user_id=%s AND author_id IN ({placeholders})"
+    params: list[Any] = [user["user_id"]] + id_list
+    rows = fetch_all(sql, tuple(params))
+    followed = {r["author_id"] for r in rows}
+    result = {str(i): (i in followed) for i in id_list}
+    return {"following": result}
 
 
 @app.delete("/api/write/stories/{story_id}")
